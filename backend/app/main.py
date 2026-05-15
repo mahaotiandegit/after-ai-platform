@@ -47,3 +47,7 @@ app.include_router(ai_audit.router, prefix="/api/v1")
 # bad cases
 from app.api.v1 import bad_cases
 app.include_router(bad_cases.router, prefix="/api/v1")
+
+# ai quality
+from app.api.v1 import ai_quality
+app.include_router(ai_quality.router, prefix="/api/v1/ai-quality")
