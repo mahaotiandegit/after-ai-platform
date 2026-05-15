@@ -30,3 +30,8 @@ def healthz():
         "service": "after-ai-platform",
         "version": "0.1.0",
     }
+
+
+# ticket ai classifier v1
+from app.api.v1 import ticket_ai_classifier
+app.include_router(ticket_ai_classifier.router, prefix="/api/v1")
