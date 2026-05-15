@@ -442,11 +442,139 @@ def _evaluate_analytics_nl2sql(output_payload: dict):
     return issues, suggestions
 
 
+
+
+def _iter_payload_dicts(value, max_depth: int = 8):
+    if max_depth < 0:
+        return
+
+    if isinstance(value, dict):
+        yield value
+
+        preferred_keys = [
+            "output_payload",
+            "payload",
+            "result",
+            "data",
+            "response",
+            "body",
+            "content",
+            "output",
+            "message",
+            "items",
+        ]
+
+        for key in preferred_keys:
+            if key in value:
+                yield from _iter_payload_dicts(value[key], max_depth - 1)
+
+        for key, child in value.items():
+            if key not in preferred_keys:
+                yield from _iter_payload_dicts(child, max_depth - 1)
+
+    elif isinstance(value, list):
+        for child in value[:5]:
+            yield from _iter_payload_dicts(child, max_depth - 1)
+
+
+def _candidate_score(candidate: dict, expected_keys: set[str]) -> int:
+    score = 0
+
+    for key in expected_keys:
+        if key in candidate and candidate.get(key) not in [None, "", [], {}]:
+            score += 10
+
+    # 常见包装字段优先级降低，业务字段优先级升高
+    business_bonus_keys = {
+        "answer",
+        "citations",
+        "hits",
+        "sql",
+        "columns",
+        "rows",
+        "summary",
+        "category",
+        "priority",
+        "title",
+        "recommended_action",
+    }
+
+    for key in business_bonus_keys:
+        if key in candidate and candidate.get(key) not in [None, "", [], {}]:
+            score += 2
+
+    return score
+
+
+def _find_best_payload_candidate(payload: dict, expected_keys: set[str]) -> dict:
+    best = payload
+    best_score = _candidate_score(payload, expected_keys)
+
+    for candidate in _iter_payload_dicts(payload):
+        score = _candidate_score(candidate, expected_keys)
+        if score > best_score:
+            best = candidate
+            best_score = score
+
+    return best
+
+
+def _normalize_ai_output_payload(scene: str | None, payload: dict) -> dict:
+    """
+    兼容 AI 审计日志中常见的 output_payload 包装结构。
+
+    支持：
+    - 顶层字段
+    - result/data/response/body/output/payload 嵌套字段
+    - list 中第一层结果字段
+
+    目标是让质量评估读取“真正业务输出”，避免把外层审计包装误判成空结果。
+    """
+    if not isinstance(payload, dict):
+        return {}
+
+    if scene == "rag_ask_llm":
+        expected = {"answer", "citations", "hits"}
+    elif scene == "analytics_nl2sql":
+        expected = {"sql", "columns", "rows", "summary"}
+    elif scene == "ticket_ai_classifier":
+        expected = {"category", "priority", "title", "summary", "recommended_action"}
+    else:
+        expected = {
+            "answer",
+            "citations",
+            "hits",
+            "sql",
+            "columns",
+            "rows",
+            "summary",
+            "category",
+            "priority",
+            "title",
+        }
+
+    candidate = _find_best_payload_candidate(payload, expected)
+
+    # 有些结构是 {"result": {"data": {...}}, "success": true}
+    # 如果候选仍然没有关键字段，再尝试把所有嵌套 dict 的业务字段合并出来。
+    if _candidate_score(candidate, expected) == 0:
+        merged = {}
+        for item in _iter_payload_dicts(payload):
+            for key in expected:
+                if key in item and key not in merged:
+                    merged[key] = item.get(key)
+        if merged:
+            return merged
+
+    return candidate
+
+
 def _evaluate_ai_invocation(row: dict):
     scene = row.get("scene")
     success = row.get("success")
     error_message = row.get("error_message")
-    output_payload = _load_payload(row.get("output_payload"))
+    raw_output_payload = _load_payload(row.get("output_payload"))
+    output_payload = _normalize_ai_output_payload(scene, raw_output_payload)
 
     issues = []
     suggestions = []
@@ -497,7 +625,7 @@ def _evaluate_ai_invocation(row: dict):
     }
 
 
-def run_recent_ai_quality_evaluations(db, limit: int = 20):
+def run_recent_ai_quality_evaluations(db, limit: int = 20, force: bool = False):
     import json
 
     limit = max(1, min(int(limit or 20), 100))
@@ -518,25 +646,44 @@ def run_recent_ai_quality_evaluations(db, limit: int = 20):
             "message": "ai_quality_evaluations table not found, run alembic upgrade head first",
         }
 
-    rows = db.execute(
-        text("""
-            SELECT
-                l.id,
-                l.scene,
-                l.provider,
-                l.model,
-                l.success,
-                l.error_message,
-                l.output_payload,
-                l.created_at
-            FROM ai_invocation_logs l
-            LEFT JOIN ai_quality_evaluations e ON e.ai_log_id = l.id
-            WHERE e.id IS NULL
-            ORDER BY l.created_at DESC
-            LIMIT :limit
-        """),
-        {"limit": limit},
-    ).mappings().all()
+    if force:
+        rows = db.execute(
+            text("""
+                SELECT
+                    l.id,
+                    l.scene,
+                    l.provider,
+                    l.model,
+                    l.success,
+                    l.error_message,
+                    l.output_payload,
+                    l.created_at
+                FROM ai_invocation_logs l
+                ORDER BY l.created_at DESC
+                LIMIT :limit
+            """),
+            {"limit": limit},
+        ).mappings().all()
+    else:
+        rows = db.execute(
+            text("""
+                SELECT
+                    l.id,
+                    l.scene,
+                    l.provider,
+                    l.model,
+                    l.success,
+                    l.error_message,
+                    l.output_payload,
+                    l.created_at
+                FROM ai_invocation_logs l
+                LEFT JOIN ai_quality_evaluations e ON e.ai_log_id = l.id
+                WHERE e.id IS NULL
+                ORDER BY l.created_at DESC
+                LIMIT :limit
+            """),
+            {"limit": limit},
+        ).mappings().all()
 
     items = []
 
@@ -603,6 +750,7 @@ def run_recent_ai_quality_evaluations(db, limit: int = 20):
 
     return {
         "requested_limit": limit,
+        "force": bool(force),
         "evaluated_count": len(items),
         "items": items,
     }

@@ -21,9 +21,10 @@ def trends(
 @router.post("/evaluations/run-recent")
 def run_recent_evaluations(
     limit: int = Query(default=20, ge=1, le=100),
+    force: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
-    return run_recent_ai_quality_evaluations(db, limit=limit)
+    return run_recent_ai_quality_evaluations(db, limit=limit, force=force)
 
 
 
