@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import asdict, dataclass
 from typing import Any
+
+from app.services.ai_audit_log import write_ai_invocation_log
 
 
 @dataclass(frozen=True)
@@ -112,11 +115,13 @@ def classify_ticket_with_llm_gateway(
     customer_question: str,
     context: dict[str, Any] | None = None,
 ) -> TicketAIClassificationResult:
+    started_at = time.perf_counter()
+
     provider, model = _detect_llm_gateway_meta()
 
     rule_result = _rule_classify(customer_question)
 
-    return TicketAIClassificationResult(
+    result = TicketAIClassificationResult(
         category=rule_result["category"],
         priority=rule_result["priority"],
         title=rule_result["title"],
@@ -127,6 +132,21 @@ def classify_ticket_with_llm_gateway(
         used_llm=True,
         classification_source=f"llm_gateway:{provider}+rule_fallback",
     )
+
+    write_ai_invocation_log(
+        scene="ticket_ai_classifier",
+        provider=provider,
+        model=model,
+        input_payload={
+            "customer_question": customer_question,
+            "context": context or {},
+        },
+        output_payload=asdict(result),
+        success=True,
+        started_at=started_at,
+    )
+
+    return result
 
 
 def classify_ticket(
