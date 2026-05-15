@@ -4,3 +4,4 @@ __pycache__/
 .venv/
 .env
 .acceptance_uvicorn.log
+.acceptance_uvicorn.pid
