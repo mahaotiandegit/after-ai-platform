@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.db.deps import get_db
-from app.services.ai_quality_service import get_ai_quality_overview, get_ai_quality_trends
+from app.services.ai_quality_service import get_ai_quality_overview, get_ai_quality_trends, run_recent_ai_quality_evaluations, list_ai_quality_evaluations
 
 router = APIRouter()
 
@@ -17,3 +17,20 @@ def trends(
     db: Session = Depends(get_db),
 ):
     return get_ai_quality_trends(db, days=days)
+
+@router.post("/evaluations/run-recent")
+def run_recent_evaluations(
+    limit: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    return run_recent_ai_quality_evaluations(db, limit=limit)
+
+
+@router.get("/evaluations")
+def evaluations(
+    limit: int = Query(default=20, ge=1, le=100),
+    status: str | None = Query(default=None),
+    scene: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    return list_ai_quality_evaluations(db, limit=limit, status=status, scene=scene)

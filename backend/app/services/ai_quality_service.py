@@ -307,3 +307,364 @@ def get_ai_quality_trends(db, days: int = 7):
         "scene_daily_distribution": scene_daily_distribution,
         "daily_bad_cases": daily_bad_cases,
     }
+
+def _load_payload(value):
+    import json
+
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list):
+        return {"items": value}
+    if isinstance(value, str):
+        try:
+            loaded = json.loads(value)
+            if isinstance(loaded, dict):
+                return loaded
+            return {"value": loaded}
+        except Exception:
+            return {"raw": value}
+    return {"raw": str(value)}
+
+
+def _truthy_text(value) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _first_present(payload: dict, keys: list[str]):
+    for key in keys:
+        if key in payload:
+            return payload.get(key)
+    return None
+
+
+def _evaluate_rag_ask_llm(output_payload: dict):
+    issues = []
+    suggestions = []
+
+    answer = output_payload.get("answer")
+    citations = output_payload.get("citations")
+    hits = output_payload.get("hits")
+
+    if not _truthy_text(answer):
+        issues.append("answer is empty")
+        suggestions.append("确保 RAG 链路返回可读 answer，而不是只返回检索 hits。")
+    elif len(answer.strip()) < 30:
+        issues.append("answer is too short")
+        suggestions.append("补充适用条件、处理动作和升级条件，避免回答过短。")
+
+    if not citations:
+        issues.append("citations is empty")
+        suggestions.append("RAG 回答必须返回引用来源，便于客服追溯规则出处。")
+
+    if not hits:
+        issues.append("hits is empty")
+        suggestions.append("检查知识检索召回结果，避免 LLM 无依据生成。")
+
+    sop_keywords = ["适用条件", "排除条件", "处理动作", "升级条件"]
+    if _truthy_text(answer):
+        matched = [kw for kw in sop_keywords if kw in answer]
+        if len(matched) < 2:
+            issues.append("answer lacks structured SOP fields")
+            suggestions.append("Prompt 应强制输出：适用条件、排除条件、处理动作、升级条件。")
+
+    return issues, suggestions
+
+
+def _evaluate_ticket_ai_classifier(output_payload: dict):
+    issues = []
+    suggestions = []
+
+    required_fields = ["category", "priority", "title", "summary"]
+    for field in required_fields:
+        if not _truthy_text(output_payload.get(field)):
+            issues.append(f"{field} is missing")
+            suggestions.append(f"工单 AI 分类结果必须包含 {field}。")
+
+    priority = output_payload.get("priority")
+    if priority and priority not in ["low", "medium", "high", "urgent"]:
+        issues.append("priority is invalid")
+        suggestions.append("priority 应限制在 low / medium / high / urgent。")
+
+    if not _truthy_text(output_payload.get("recommended_action")):
+        issues.append("recommended_action is missing")
+        suggestions.append("分类结果建议返回 recommended_action，便于客服直接处理。")
+
+    return issues, suggestions
+
+
+def _evaluate_analytics_nl2sql(output_payload: dict):
+    issues = []
+    suggestions = []
+
+    sql = output_payload.get("sql")
+    summary = output_payload.get("summary")
+
+    if not _truthy_text(sql):
+        issues.append("sql is empty")
+        suggestions.append("NL2SQL 必须返回 sql 字段。")
+    else:
+        normalized_sql = sql.strip().lower()
+        dangerous_keywords = [
+            "insert ",
+            "update ",
+            "delete ",
+            "drop ",
+            "alter ",
+            "truncate ",
+            "create ",
+            "grant ",
+            "revoke ",
+            "copy ",
+        ]
+
+        if not normalized_sql.startswith("select"):
+            issues.append("sql is not read-only select")
+            suggestions.append("NL2SQL 只允许生成 SELECT 查询。")
+
+        if any(keyword in normalized_sql for keyword in dangerous_keywords):
+            issues.append("sql contains dangerous keyword")
+            suggestions.append("拦截所有写入、删表、改表、授权类 SQL。")
+
+    if not _truthy_text(summary):
+        issues.append("summary is missing")
+        suggestions.append("运营问数应返回自然语言 summary，不能只返回表格。")
+
+    if "columns" not in output_payload:
+        issues.append("columns is missing")
+        suggestions.append("NL2SQL 返回结果应包含 columns，便于前端渲染表格。")
+
+    if "rows" not in output_payload:
+        issues.append("rows is missing")
+        suggestions.append("NL2SQL 返回结果应包含 rows，便于运营复核数据。")
+
+    return issues, suggestions
+
+
+def _evaluate_ai_invocation(row: dict):
+    scene = row.get("scene")
+    success = row.get("success")
+    error_message = row.get("error_message")
+    output_payload = _load_payload(row.get("output_payload"))
+
+    issues = []
+    suggestions = []
+
+    if success is False:
+        issues.append("ai invocation failed")
+        if error_message:
+            issues.append(f"error: {error_message}")
+        suggestions.append("优先排查 provider 调用、Prompt 输入和异常捕获。")
+
+    if not output_payload:
+        issues.append("output_payload is empty")
+        suggestions.append("AI 调用必须落库 output_payload，便于审计和复盘。")
+
+    if scene == "rag_ask_llm":
+        sub_issues, sub_suggestions = _evaluate_rag_ask_llm(output_payload)
+        issues.extend(sub_issues)
+        suggestions.extend(sub_suggestions)
+    elif scene == "ticket_ai_classifier":
+        sub_issues, sub_suggestions = _evaluate_ticket_ai_classifier(output_payload)
+        issues.extend(sub_issues)
+        suggestions.extend(sub_suggestions)
+    elif scene == "analytics_nl2sql":
+        sub_issues, sub_suggestions = _evaluate_analytics_nl2sql(output_payload)
+        issues.extend(sub_issues)
+        suggestions.extend(sub_suggestions)
+    else:
+        issues.append("unknown scene")
+        suggestions.append("为新的 AI 场景补充质量评估规则。")
+
+    score = max(0, 100 - len(set(issues)) * 15)
+
+    if success is False:
+        score = min(score, 40)
+
+    if score >= 85 and not issues:
+        status = "pass"
+    elif score >= 60:
+        status = "warn"
+    else:
+        status = "fail"
+
+    return {
+        "score": score,
+        "status": status,
+        "issues": list(dict.fromkeys(issues)),
+        "suggestions": list(dict.fromkeys(suggestions)),
+    }
+
+
+def run_recent_ai_quality_evaluations(db, limit: int = 20):
+    import json
+
+    limit = max(1, min(int(limit or 20), 100))
+
+    if not _has_table(db, "ai_invocation_logs"):
+        return {
+            "requested_limit": limit,
+            "evaluated_count": 0,
+            "items": [],
+            "message": "ai_invocation_logs table not found",
+        }
+
+    if not _has_table(db, "ai_quality_evaluations"):
+        return {
+            "requested_limit": limit,
+            "evaluated_count": 0,
+            "items": [],
+            "message": "ai_quality_evaluations table not found, run alembic upgrade head first",
+        }
+
+    rows = db.execute(
+        text("""
+            SELECT
+                l.id,
+                l.scene,
+                l.provider,
+                l.model,
+                l.success,
+                l.error_message,
+                l.output_payload,
+                l.created_at
+            FROM ai_invocation_logs l
+            LEFT JOIN ai_quality_evaluations e ON e.ai_log_id = l.id
+            WHERE e.id IS NULL
+            ORDER BY l.created_at DESC
+            LIMIT :limit
+        """),
+        {"limit": limit},
+    ).mappings().all()
+
+    items = []
+
+    for row in rows:
+        row_dict = dict(row)
+        result = _evaluate_ai_invocation(row_dict)
+
+        inserted = db.execute(
+            text("""
+                INSERT INTO ai_quality_evaluations (
+                    ai_log_id,
+                    scene,
+                    provider,
+                    model,
+                    score,
+                    status,
+                    issues,
+                    suggestions
+                )
+                VALUES (
+                    :ai_log_id,
+                    :scene,
+                    :provider,
+                    :model,
+                    :score,
+                    :status,
+                    CAST(:issues AS JSONB),
+                    CAST(:suggestions AS JSONB)
+                )
+                ON CONFLICT (ai_log_id) DO UPDATE SET
+                    score = EXCLUDED.score,
+                    status = EXCLUDED.status,
+                    issues = EXCLUDED.issues,
+                    suggestions = EXCLUDED.suggestions,
+                    evaluated_at = now()
+                RETURNING
+                    id,
+                    ai_log_id,
+                    scene,
+                    provider,
+                    model,
+                    score,
+                    status,
+                    issues,
+                    suggestions,
+                    evaluated_at,
+                    created_at
+            """),
+            {
+                "ai_log_id": row_dict["id"],
+                "scene": row_dict.get("scene") or "unknown",
+                "provider": row_dict.get("provider"),
+                "model": row_dict.get("model"),
+                "score": result["score"],
+                "status": result["status"],
+                "issues": json.dumps(result["issues"], ensure_ascii=False),
+                "suggestions": json.dumps(result["suggestions"], ensure_ascii=False),
+            },
+        ).mappings().one()
+
+        items.append({key: _jsonable(value) for key, value in dict(inserted).items()})
+
+    db.commit()
+
+    return {
+        "requested_limit": limit,
+        "evaluated_count": len(items),
+        "items": items,
+    }
+
+
+def list_ai_quality_evaluations(db, limit: int = 20, status: str | None = None, scene: str | None = None):
+    limit = max(1, min(int(limit or 20), 100))
+
+    if not _has_table(db, "ai_quality_evaluations"):
+        return {
+            "total": 0,
+            "items": [],
+            "message": "ai_quality_evaluations table not found",
+        }
+
+    where = []
+    params = {"limit": limit}
+
+    if status:
+        where.append("status = :status")
+        params["status"] = status
+
+    if scene:
+        where.append("scene = :scene")
+        params["scene"] = scene
+
+    where_sql = "WHERE " + " AND ".join(where) if where else ""
+
+    total = int(
+        db.execute(
+            text(f"SELECT COUNT(*) FROM ai_quality_evaluations {where_sql}"),
+            params,
+        ).scalar()
+        or 0
+    )
+
+    rows = db.execute(
+        text(f"""
+            SELECT
+                id,
+                ai_log_id,
+                scene,
+                provider,
+                model,
+                score,
+                status,
+                issues,
+                suggestions,
+                evaluated_at,
+                created_at
+            FROM ai_quality_evaluations
+            {where_sql}
+            ORDER BY created_at DESC
+            LIMIT :limit
+        """),
+        params,
+    ).mappings().all()
+
+    return {
+        "total": total,
+        "items": [
+            {key: _jsonable(value) for key, value in dict(row).items()}
+            for row in rows
+        ],
+    }
