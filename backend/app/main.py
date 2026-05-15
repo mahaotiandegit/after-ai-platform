@@ -6,6 +6,7 @@ from app.api.v1.knowledge import router as knowledge_router
 from app.api.v1.tickets import router as tickets_router
 from app.api.v1.analytics import router as analytics_router
 from app.api.v1.feedbacks import router as feedbacks_router
+from app.api.v1.knowledge_llm import router as knowledge_llm_router
 
 app = FastAPI(
     title="After AI Platform",
@@ -19,6 +20,7 @@ app.include_router(knowledge_router, prefix="/api/v1")
 app.include_router(tickets_router, prefix="/api/v1")
 app.include_router(feedbacks_router, prefix="/api/v1")
 app.include_router(analytics_router, prefix="/api/v1")
+app.include_router(knowledge_llm_router, prefix="/api/v1")
 
 
 @app.get("/healthz")
