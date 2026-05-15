@@ -11,6 +11,7 @@ from app.schemas.ticket import (
     TicketOut,
     TicketStatusUpdateIn,
 )
+from app.services.ticket_ai_classifier import classify_ticket
 from app.services.ticket_service import (
     auto_create_ticket,
     escalate_ticket,
@@ -27,12 +28,49 @@ def create_ticket_by_ai_rule(
     payload: TicketAutoCreateIn,
     db: Session = Depends(get_db),
 ):
-    return auto_create_ticket(
+    result = auto_create_ticket(
         db=db,
         customer_question=payload.customer_question,
         order_no=payload.order_no,
         created_by_id=payload.created_by_id,
     )
+
+    try:
+        ai_classification = classify_ticket(
+            customer_question=payload.customer_question,
+            context={
+                "order_no": payload.order_no,
+            },
+        )
+    except Exception as exc:
+        ai_classification = {
+            "llm_provider": None,
+            "llm_model": None,
+            "used_llm": False,
+            "classification_source": (
+                f"existing_rule_fallback:ticket_ai_classifier_error:{type(exc).__name__}"
+            ),
+            "recommended_action": None,
+        }
+
+    if hasattr(result, "model_dump"):
+        response = result.model_dump()
+    elif isinstance(result, dict):
+        response = dict(result)
+    else:
+        response = dict(getattr(result, "__dict__", {}))
+
+    response.update(
+        {
+            "llm_provider": ai_classification.get("llm_provider"),
+            "llm_model": ai_classification.get("llm_model"),
+            "used_llm": bool(ai_classification.get("used_llm")),
+            "classification_source": ai_classification.get("classification_source"),
+            "recommended_action": ai_classification.get("recommended_action"),
+        }
+    )
+
+    return response
 
 
 @router.get("", response_model=TicketListOut)

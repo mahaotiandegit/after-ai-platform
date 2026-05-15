@@ -28,6 +28,11 @@ class TicketOut(BaseModel):
 
 
 class TicketAutoCreateOut(BaseModel):
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    used_llm: bool = False
+    classification_source: str | None = None
+    recommended_action: str | None = None
     ticket: TicketOut
     classification_reason: str
     next_action: str
