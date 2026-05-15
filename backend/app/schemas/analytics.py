@@ -1,19 +1,21 @@
-from pydantic import BaseModel
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 
-class CountItem(BaseModel):
-    label: str
-    count: int
+class AnalyticsAskRequest(BaseModel):
+    question: str = Field(..., min_length=2, max_length=500)
+    limit: int = Field(default=20, ge=1, le=100)
 
+
+class AnalyticsAskResponse(BaseModel):
+    question: str
+    intent: str
+    sql: str
+    columns: list[str]
+    rows: list[dict[str, Any]]
+    summary: str
 
 class AnalyticsOverviewOut(BaseModel):
-    orders_total: int
-    tickets_total: int
-    tickets_open: int
-    tickets_high_priority: int
-    refunds_pending: int
-    documents_indexed: int
-    avg_qa_latency_ms: float
-    ticket_status_distribution: list[CountItem]
-    ticket_category_distribution: list[CountItem]
-    refund_status_distribution: list[CountItem]
+    class Config:
+        extra = "allow"
