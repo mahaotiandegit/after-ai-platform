@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: aftersale-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aftersale
+      POSTGRES_PASSWORD: aftersale123
+      POSTGRES_DB: aftersale_ai
+      TZ: Asia/Tokyo
+    ports:
+      - "5432:5432"
+    volumes:
+      - aftersale_pg_data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aftersale -d aftersale_ai"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: aftersale-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - aftersale_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  aftersale_pg_data:
+  aftersale_redis_data:

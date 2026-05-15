@@ -1,0 +1,70 @@
+from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from app.db.deps import get_db
+from app.schemas.knowledge import KnowledgeSearchOut
+from app.services.knowledge_search_service import search_knowledge
+
+router = APIRouter(prefix="/knowledge", tags=["knowledge"])
+
+class KnowledgeHit(BaseModel):
+    chunk_id: str
+    document_id: str
+    document_title: str
+    file_name: str | None = None
+    file_type: str | None = None
+    content: str
+    page_no: int | None = None
+    policy_code: str | None = None
+    section: str | None = None
+    score: float = 0.0
+
+
+class KnowledgeAskRequest(BaseModel):
+    question: str = Field(..., min_length=1, description="客服输入的问题")
+    top_k: int = Field(default=5, ge=1, le=10, description="返回命中文档数量")
+
+
+class KnowledgeAskResponse(BaseModel):
+    question: str | None = None
+    query: str | None = None
+    answer: str | None = None
+    answer_summary: str | None = None
+    citations: list[KnowledgeHit] = Field(default_factory=list)
+    hits: list[KnowledgeHit] = Field(default_factory=list)
+    qa_log_id: str | None = None
+
+@router.get("/search", response_model=KnowledgeSearchOut)
+def search(
+    q: str = Query(..., min_length=1, description="知识检索关键词"),
+    limit: int = Query(5, ge=1, le=20),
+    db: Session = Depends(get_db),
+):
+    return search_knowledge(db=db, query=q, limit=limit)
+
+@router.post("/ask", response_model=KnowledgeAskResponse)
+def ask_knowledge_api(payload: KnowledgeAskRequest, db: Session = Depends(get_db)):
+    search_result = search_knowledge(
+        db=db,
+        q=payload.question,
+        top_k=payload.top_k,
+    )
+
+    return ask_knowledge(
+        db,
+        question=payload.question,
+        search_result=search_result,
+    )
+
+class KnowledgeAskRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=1000)
+    top_k: int = Field(default=5, ge=1, le=20)
+
+
+class KnowledgeAskResponse(BaseModel):
+    qa_log_id: str
+    question: str
+    answer: str
+    citations: list[dict]
+    latency_ms: int
