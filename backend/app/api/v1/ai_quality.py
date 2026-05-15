@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.db.deps import get_db
-from app.services.ai_quality_service import get_ai_quality_overview, get_ai_quality_trends, run_recent_ai_quality_evaluations, list_ai_quality_evaluations
+from app.services.ai_quality_service import get_ai_quality_overview, get_ai_quality_trends, run_recent_ai_quality_evaluations, list_ai_quality_evaluations, get_ai_quality_evaluation_summary
 
 router = APIRouter()
 
@@ -25,6 +25,20 @@ def run_recent_evaluations(
 ):
     return run_recent_ai_quality_evaluations(db, limit=limit)
 
+
+
+
+@router.get("/evaluations/summary")
+def evaluation_summary(
+    recent_limit: int = Query(default=5, ge=1, le=20),
+    top_issue_limit: int = Query(default=10, ge=1, le=50),
+    db: Session = Depends(get_db),
+):
+    return get_ai_quality_evaluation_summary(
+        db,
+        recent_limit=recent_limit,
+        top_issue_limit=top_issue_limit,
+    )
 
 @router.get("/evaluations")
 def evaluations(

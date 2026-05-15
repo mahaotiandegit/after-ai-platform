@@ -668,3 +668,156 @@ def list_ai_quality_evaluations(db, limit: int = 20, status: str | None = None, 
             for row in rows
         ],
     }
+
+def get_ai_quality_evaluation_summary(db, recent_limit: int = 5, top_issue_limit: int = 10):
+    """
+    Aggregate AI quality evaluation results for dashboard.
+
+    Returns:
+    - total evaluations
+    - pass / warn / fail count
+    - average score
+    - status distribution
+    - scene-level score summary
+    - most common issues
+    - recent high-risk evaluations
+    """
+    recent_limit = max(1, min(int(recent_limit or 5), 20))
+    top_issue_limit = max(1, min(int(top_issue_limit or 10), 50))
+
+    if not _has_table(db, "ai_quality_evaluations"):
+        return {
+            "total_evaluations": 0,
+            "pass_count": 0,
+            "warn_count": 0,
+            "fail_count": 0,
+            "average_score": 0.0,
+            "status_distribution": {},
+            "scene_score_summary": [],
+            "top_issues": [],
+            "recent_high_risk_evaluations": [],
+            "message": "ai_quality_evaluations table not found",
+        }
+
+    total_row = db.execute(
+        text("""
+            SELECT
+                COUNT(*) AS total,
+                COALESCE(AVG(score), 0) AS average_score,
+                SUM(CASE WHEN status = 'pass' THEN 1 ELSE 0 END) AS pass_count,
+                SUM(CASE WHEN status = 'warn' THEN 1 ELSE 0 END) AS warn_count,
+                SUM(CASE WHEN status = 'fail' THEN 1 ELSE 0 END) AS fail_count
+            FROM ai_quality_evaluations
+        """)
+    ).mappings().one()
+
+    total_evaluations = int(total_row["total"] or 0)
+    pass_count = int(total_row["pass_count"] or 0)
+    warn_count = int(total_row["warn_count"] or 0)
+    fail_count = int(total_row["fail_count"] or 0)
+    average_score = round(float(total_row["average_score"] or 0), 2)
+
+    status_rows = db.execute(
+        text("""
+            SELECT status, COUNT(*) AS count
+            FROM ai_quality_evaluations
+            GROUP BY status
+            ORDER BY count DESC, status ASC
+        """)
+    ).mappings().all()
+
+    status_distribution = {
+        str(row["status"]): int(row["count"] or 0)
+        for row in status_rows
+    }
+
+    for default_status in ["pass", "warn", "fail"]:
+        status_distribution.setdefault(default_status, 0)
+
+    scene_rows = db.execute(
+        text("""
+            SELECT
+                scene,
+                COUNT(*) AS total,
+                COALESCE(AVG(score), 0) AS average_score,
+                SUM(CASE WHEN status = 'pass' THEN 1 ELSE 0 END) AS pass_count,
+                SUM(CASE WHEN status = 'warn' THEN 1 ELSE 0 END) AS warn_count,
+                SUM(CASE WHEN status = 'fail' THEN 1 ELSE 0 END) AS fail_count
+            FROM ai_quality_evaluations
+            GROUP BY scene
+            ORDER BY total DESC, scene ASC
+        """)
+    ).mappings().all()
+
+    scene_score_summary = []
+    for row in scene_rows:
+        scene_score_summary.append({
+            "scene": row["scene"],
+            "total": int(row["total"] or 0),
+            "average_score": round(float(row["average_score"] or 0), 2),
+            "pass_count": int(row["pass_count"] or 0),
+            "warn_count": int(row["warn_count"] or 0),
+            "fail_count": int(row["fail_count"] or 0),
+        })
+
+    top_issue_rows = db.execute(
+        text("""
+            SELECT issue, COUNT(*) AS count
+            FROM ai_quality_evaluations,
+                 jsonb_array_elements_text(issues) AS issue
+            GROUP BY issue
+            ORDER BY count DESC, issue ASC
+            LIMIT :limit
+        """),
+        {"limit": top_issue_limit},
+    ).mappings().all()
+
+    top_issues = [
+        {
+            "issue": row["issue"],
+            "count": int(row["count"] or 0),
+        }
+        for row in top_issue_rows
+    ]
+
+    recent_rows = db.execute(
+        text("""
+            SELECT
+                id,
+                ai_log_id,
+                scene,
+                provider,
+                model,
+                score,
+                status,
+                issues,
+                suggestions,
+                evaluated_at,
+                created_at
+            FROM ai_quality_evaluations
+            WHERE status IN ('fail', 'warn')
+            ORDER BY
+                CASE WHEN status = 'fail' THEN 0 ELSE 1 END,
+                score ASC,
+                created_at DESC
+            LIMIT :limit
+        """),
+        {"limit": recent_limit},
+    ).mappings().all()
+
+    recent_high_risk_evaluations = [
+        {key: _jsonable(value) for key, value in dict(row).items()}
+        for row in recent_rows
+    ]
+
+    return {
+        "total_evaluations": total_evaluations,
+        "pass_count": pass_count,
+        "warn_count": warn_count,
+        "fail_count": fail_count,
+        "average_score": average_score,
+        "status_distribution": status_distribution,
+        "scene_score_summary": scene_score_summary,
+        "top_issues": top_issues,
+        "recent_high_risk_evaluations": recent_high_risk_evaluations,
+    }
