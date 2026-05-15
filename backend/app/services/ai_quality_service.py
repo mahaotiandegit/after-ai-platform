@@ -969,3 +969,422 @@ def get_ai_quality_evaluation_summary(db, recent_limit: int = 5, top_issue_limit
         "top_issues": top_issues,
         "recent_high_risk_evaluations": recent_high_risk_evaluations,
     }
+
+def _ensure_json_list(value):
+    import json
+
+    if value is None:
+        return []
+
+    if isinstance(value, list):
+        return value
+
+    if isinstance(value, tuple):
+        return list(value)
+
+    if isinstance(value, str):
+        try:
+            loaded = json.loads(value)
+            if isinstance(loaded, list):
+                return loaded
+            return [loaded]
+        except Exception:
+            return [value]
+
+    return [value]
+
+
+def _bad_case_column_types(db) -> dict[str, str]:
+    if not _has_table(db, "bad_cases"):
+        return {}
+
+    rows = db.execute(
+        text("""
+            SELECT column_name, data_type, udt_name
+            FROM information_schema.columns
+            WHERE table_name = 'bad_cases'
+        """)
+    ).mappings().all()
+
+    return {
+        row["column_name"]: row["udt_name"] or row["data_type"]
+        for row in rows
+    }
+
+
+def _fetch_bad_case_by_id(db, bad_case_id):
+    cols = _columns(db, "bad_cases")
+    if not cols:
+        return None
+
+    wanted = [
+        "id",
+        "ai_log_id",
+        "ai_invocation_log_id",
+        "scene",
+        "correction",
+        "root_cause",
+        "priority",
+        "tags",
+        "status",
+        "created_at",
+        "updated_at",
+    ]
+    selected = [c for c in wanted if c in cols]
+
+    if not selected:
+        return None
+
+    row = db.execute(
+        text(f"""
+            SELECT {", ".join(selected)}
+            FROM bad_cases
+            WHERE id::text = :id
+            LIMIT 1
+        """),
+        {"id": str(bad_case_id)},
+    ).mappings().first()
+
+    if not row:
+        return None
+
+    return {key: _jsonable(value) for key, value in dict(row).items()}
+
+
+def _find_existing_bad_case_for_evaluation(db, evaluation_id, ai_log_id=None):
+    if not _has_table(db, "bad_cases"):
+        return None
+
+    cols = _columns(db, "bad_cases")
+    where_parts = []
+    params = {}
+
+    if "tags" in cols:
+        where_parts.append("tags::text LIKE :evaluation_tag")
+        params["evaluation_tag"] = f"%ai_quality_evaluation:{evaluation_id}%"
+
+    if ai_log_id is not None and "ai_log_id" in cols:
+        where_parts.append("ai_log_id::text = :ai_log_id_text")
+        params["ai_log_id_text"] = str(ai_log_id)
+
+    if ai_log_id is not None and "ai_invocation_log_id" in cols:
+        where_parts.append("ai_invocation_log_id::text = :ai_log_id_text")
+        params["ai_log_id_text"] = str(ai_log_id)
+
+    if not where_parts:
+        return None
+
+    row = db.execute(
+        text(f"""
+            SELECT id
+            FROM bad_cases
+            WHERE {" OR ".join(where_parts)}
+            ORDER BY created_at DESC
+            LIMIT 1
+        """),
+        params,
+    ).mappings().first()
+
+    if not row:
+        return None
+
+    return _fetch_bad_case_by_id(db, row["id"])
+
+
+def _load_ai_quality_evaluation(db, evaluation_id):
+    if not _has_table(db, "ai_quality_evaluations"):
+        return None
+
+    row = db.execute(
+        text("""
+            SELECT
+                id,
+                ai_log_id,
+                scene,
+                provider,
+                model,
+                score,
+                status,
+                issues,
+                suggestions,
+                evaluated_at,
+                created_at
+            FROM ai_quality_evaluations
+            WHERE id::text = :evaluation_id
+            LIMIT 1
+        """),
+        {"evaluation_id": str(evaluation_id)},
+    ).mappings().first()
+
+    if not row:
+        return None
+
+    return dict(row)
+
+
+def _build_bad_case_payload_from_evaluation(evaluation: dict):
+    issues = _ensure_json_list(evaluation.get("issues"))
+    suggestions = _ensure_json_list(evaluation.get("suggestions"))
+
+    score = int(evaluation.get("score") or 0)
+    status = evaluation.get("status") or "unknown"
+    scene = evaluation.get("scene") or "unknown"
+
+    if status == "fail" or score <= 40:
+        priority = "high"
+    elif score <= 60:
+        priority = "medium"
+    else:
+        priority = "low"
+
+    root_cause = "；".join(str(x) for x in issues[:6] if str(x).strip())
+    if not root_cause:
+        root_cause = f"AI quality evaluation status={status}, score={score}"
+
+    correction = "；".join(str(x) for x in suggestions[:6] if str(x).strip())
+    if not correction:
+        correction = "根据 AI 质量评估结果优化 prompt、工具调用、输出结构或异常处理。"
+
+    tags = [
+        "ai_quality",
+        "auto_created",
+        f"ai_quality_evaluation:{evaluation.get('id')}",
+        f"ai_log:{evaluation.get('ai_log_id')}",
+        f"scene:{scene}",
+        f"status:{status}",
+        f"score:{score}",
+    ]
+
+    return {
+        "scene": scene,
+        "ai_log_id": evaluation.get("ai_log_id"),
+        "correction": correction,
+        "root_cause": root_cause,
+        "priority": priority,
+        "tags": tags,
+        "status": "open",
+    }
+
+
+def _insert_bad_case_from_payload(db, payload: dict):
+    import json
+    import uuid
+
+    if not _has_table(db, "bad_cases"):
+        raise RuntimeError("bad_cases table not found")
+
+    cols = _columns(db, "bad_cases")
+    col_types = _bad_case_column_types(db)
+
+    insert_values = {}
+
+    if "id" in cols:
+        insert_values["id"] = str(uuid.uuid4())
+
+    if "scene" in cols:
+        insert_values["scene"] = payload["scene"]
+
+    if "ai_log_id" in cols:
+        insert_values["ai_log_id"] = payload["ai_log_id"]
+
+    if "ai_invocation_log_id" in cols:
+        insert_values["ai_invocation_log_id"] = payload["ai_log_id"]
+
+    if "correction" in cols:
+        insert_values["correction"] = payload["correction"]
+
+    if "root_cause" in cols:
+        insert_values["root_cause"] = payload["root_cause"]
+
+    if "priority" in cols:
+        insert_values["priority"] = payload["priority"]
+
+    if "status" in cols:
+        insert_values["status"] = payload["status"]
+
+    if "tags" in cols:
+        insert_values["tags"] = payload["tags"]
+
+    if not insert_values:
+        raise RuntimeError("bad_cases has no compatible columns for insertion")
+
+    columns = []
+    placeholders = []
+    params = {}
+
+    for key, value in insert_values.items():
+        columns.append(key)
+
+        if key == "tags":
+            tag_type = col_types.get("tags", "")
+            if tag_type in ["json", "jsonb"]:
+                placeholders.append("CAST(:tags AS JSONB)")
+                params["tags"] = json.dumps(value, ensure_ascii=False)
+            else:
+                placeholders.append(":tags")
+                params["tags"] = ",".join(str(x) for x in value)
+        else:
+            placeholders.append(f":{key}")
+            params[key] = value
+
+    returning_wanted = [
+        "id",
+        "ai_log_id",
+        "ai_invocation_log_id",
+        "scene",
+        "correction",
+        "root_cause",
+        "priority",
+        "tags",
+        "status",
+        "created_at",
+        "updated_at",
+    ]
+    returning_cols = [c for c in returning_wanted if c in cols]
+
+    row = db.execute(
+        text(f"""
+            INSERT INTO bad_cases ({", ".join(columns)})
+            VALUES ({", ".join(placeholders)})
+            RETURNING {", ".join(returning_cols)}
+        """),
+        params,
+    ).mappings().one()
+
+    return {key: _jsonable(value) for key, value in dict(row).items()}
+
+
+def create_bad_case_from_ai_quality_evaluation(db, evaluation_id: str):
+    evaluation = _load_ai_quality_evaluation(db, evaluation_id)
+
+    if not evaluation:
+        return {
+            "action": "not_found",
+            "message": "ai quality evaluation not found",
+            "evaluation_id": str(evaluation_id),
+            "bad_case": None,
+        }
+
+    score = int(evaluation.get("score") or 0)
+    status = evaluation.get("status") or "unknown"
+
+    if status != "fail" and score > 60:
+        return {
+            "action": "skipped",
+            "reason": "evaluation is not high risk",
+            "evaluation_id": _jsonable(evaluation["id"]),
+            "score": score,
+            "status": status,
+            "bad_case": None,
+        }
+
+    existing = _find_existing_bad_case_for_evaluation(
+        db,
+        evaluation_id=evaluation["id"],
+        ai_log_id=evaluation.get("ai_log_id"),
+    )
+
+    if existing:
+        return {
+            "action": "skipped",
+            "reason": "bad case already exists for this evaluation or ai log",
+            "evaluation_id": _jsonable(evaluation["id"]),
+            "bad_case": existing,
+        }
+
+    payload = _build_bad_case_payload_from_evaluation(evaluation)
+    bad_case = _insert_bad_case_from_payload(db, payload)
+    db.commit()
+
+    return {
+        "action": "created",
+        "evaluation_id": _jsonable(evaluation["id"]),
+        "bad_case": bad_case,
+    }
+
+
+def auto_create_bad_cases_from_high_risk_evaluations(db, score_lte: int = 60, limit: int = 20):
+    score_lte = max(0, min(int(score_lte or 60), 100))
+    limit = max(1, min(int(limit or 20), 100))
+
+    if not _has_table(db, "ai_quality_evaluations"):
+        return {
+            "score_lte": score_lte,
+            "limit": limit,
+            "created_count": 0,
+            "skipped_count": 0,
+            "items": [],
+            "message": "ai_quality_evaluations table not found",
+        }
+
+    rows = db.execute(
+        text("""
+            SELECT
+                id,
+                ai_log_id,
+                scene,
+                provider,
+                model,
+                score,
+                status,
+                issues,
+                suggestions,
+                evaluated_at,
+                created_at
+            FROM ai_quality_evaluations
+            WHERE status = 'fail'
+               OR score <= :score_lte
+            ORDER BY
+                CASE WHEN status = 'fail' THEN 0 ELSE 1 END,
+                score ASC,
+                created_at DESC
+            LIMIT :limit
+        """),
+        {
+            "score_lte": score_lte,
+            "limit": limit,
+        },
+    ).mappings().all()
+
+    items = []
+    created_count = 0
+    skipped_count = 0
+
+    for row in rows:
+        evaluation = dict(row)
+        existing = _find_existing_bad_case_for_evaluation(
+            db,
+            evaluation_id=evaluation["id"],
+            ai_log_id=evaluation.get("ai_log_id"),
+        )
+
+        if existing:
+            skipped_count += 1
+            items.append({
+                "action": "skipped",
+                "reason": "bad case already exists for this evaluation or ai log",
+                "evaluation_id": _jsonable(evaluation["id"]),
+                "bad_case": existing,
+            })
+            continue
+
+        payload = _build_bad_case_payload_from_evaluation(evaluation)
+        bad_case = _insert_bad_case_from_payload(db, payload)
+        created_count += 1
+
+        items.append({
+            "action": "created",
+            "evaluation_id": _jsonable(evaluation["id"]),
+            "bad_case": bad_case,
+        })
+
+    db.commit()
+
+    return {
+        "score_lte": score_lte,
+        "limit": limit,
+        "matched_count": len(rows),
+        "created_count": created_count,
+        "skipped_count": skipped_count,
+        "items": items,
+    }
