@@ -171,3 +171,139 @@ def get_ai_quality_overview(db):
         "recent_bad_cases": recent_bad_cases,
         "recent_failed_invocations": recent_failed_invocations,
     }
+
+def _clamp_days(days: int | None) -> int:
+    if days is None:
+        return 7
+    try:
+        days = int(days)
+    except Exception:
+        return 7
+    if days < 1:
+        return 7
+    if days > 90:
+        return 90
+    return days
+
+
+def get_ai_quality_trends(db, days: int = 7):
+    """
+    AI quality trend data for dashboard charts.
+
+    Returns daily trends for:
+    - invocation count
+    - successful / failed invocation count
+    - success rate
+    - average latency
+    - scene distribution by day
+    - bad case creation count by day
+    - bad case fixed count by day
+    """
+    days = _clamp_days(days)
+
+    has_ai_logs = _has_table(db, "ai_invocation_logs")
+    has_bad_cases = _has_table(db, "bad_cases")
+
+    ai_cols = _columns(db, "ai_invocation_logs") if has_ai_logs else set()
+    bad_cols = _columns(db, "bad_cases") if has_bad_cases else set()
+
+    daily_invocations = []
+    scene_daily_distribution = []
+    daily_bad_cases = []
+
+    if has_ai_logs and "created_at" in ai_cols:
+        success_expr = "SUM(CASE WHEN success = true THEN 1 ELSE 0 END)" if "success" in ai_cols else "0"
+        failed_expr = "SUM(CASE WHEN success = false THEN 1 ELSE 0 END)" if "success" in ai_cols else "0"
+        avg_latency_expr = "COALESCE(AVG(latency_ms), 0)" if "latency_ms" in ai_cols else "0"
+
+        rows = db.execute(
+            text(f"""
+                SELECT
+                    DATE(created_at) AS day,
+                    COUNT(*) AS total,
+                    {success_expr} AS success_count,
+                    {failed_expr} AS failed_count,
+                    {avg_latency_expr} AS avg_latency_ms
+                FROM ai_invocation_logs
+                WHERE created_at >= NOW() - (:days * INTERVAL '1 day')
+                GROUP BY DATE(created_at)
+                ORDER BY day ASC
+            """),
+            {"days": days},
+        ).mappings().all()
+
+        for row in rows:
+            total = int(row["total"] or 0)
+            success_count = int(row["success_count"] or 0)
+            failed_count = int(row["failed_count"] or 0)
+            avg_latency_ms = float(row["avg_latency_ms"] or 0)
+            success_rate = round(success_count * 100 / total, 2) if total else 0.0
+
+            daily_invocations.append({
+                "day": _jsonable(row["day"]),
+                "total": total,
+                "success_count": success_count,
+                "failed_count": failed_count,
+                "success_rate": success_rate,
+                "avg_latency_ms": round(avg_latency_ms, 2),
+            })
+
+        if "scene" in ai_cols:
+            rows = db.execute(
+                text("""
+                    SELECT
+                        DATE(created_at) AS day,
+                        scene,
+                        COUNT(*) AS count
+                    FROM ai_invocation_logs
+                    WHERE created_at >= NOW() - (:days * INTERVAL '1 day')
+                    GROUP BY DATE(created_at), scene
+                    ORDER BY day ASC, scene ASC
+                """),
+                {"days": days},
+            ).mappings().all()
+
+            for row in rows:
+                scene_daily_distribution.append({
+                    "day": _jsonable(row["day"]),
+                    "scene": row["scene"],
+                    "count": int(row["count"] or 0),
+                })
+
+    if has_bad_cases and "created_at" in bad_cols:
+        fixed_expr = (
+            "SUM(CASE WHEN status = 'fixed' THEN 1 ELSE 0 END)"
+            if "status" in bad_cols
+            else "0"
+        )
+
+        rows = db.execute(
+            text(f"""
+                SELECT
+                    DATE(created_at) AS day,
+                    COUNT(*) AS created_count,
+                    {fixed_expr} AS fixed_count
+                FROM bad_cases
+                WHERE created_at >= NOW() - (:days * INTERVAL '1 day')
+                GROUP BY DATE(created_at)
+                ORDER BY day ASC
+            """),
+            {"days": days},
+        ).mappings().all()
+
+        for row in rows:
+            created_count = int(row["created_count"] or 0)
+            fixed_count = int(row["fixed_count"] or 0)
+            daily_bad_cases.append({
+                "day": _jsonable(row["day"]),
+                "created_count": created_count,
+                "fixed_count": fixed_count,
+                "fix_rate": round(fixed_count * 100 / created_count, 2) if created_count else 0.0,
+            })
+
+    return {
+        "days": days,
+        "daily_invocations": daily_invocations,
+        "scene_daily_distribution": scene_daily_distribution,
+        "daily_bad_cases": daily_bad_cases,
+    }
