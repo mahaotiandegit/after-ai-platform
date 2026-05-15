@@ -39,3 +39,7 @@ def healthz():
 # ticket ai classifier v1
 from app.api.v1 import ticket_ai_classifier
 app.include_router(ticket_ai_classifier.router, prefix="/api/v1")
+
+# ai audit logs
+from app.api.v1 import ai_audit
+app.include_router(ai_audit.router, prefix="/api/v1")
