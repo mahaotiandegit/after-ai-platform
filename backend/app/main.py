@@ -67,3 +67,7 @@ app.include_router(ai_quality.router, prefix="/api/v1/ai-quality")
 # order workbench
 from app.api.v1 import order_workbench
 app.include_router(order_workbench.router, prefix="/api/v1")
+
+# ops pages
+from app.api.v1 import ops
+app.include_router(ops.router, prefix="/api/v1")
