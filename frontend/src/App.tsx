@@ -1,7 +1,8 @@
 import { useState } from "react";
 import "./App.css";
+import TicketCenter from "./TicketCenter";
 
-type PageKey = "knowledge" | "order";
+type PageKey = "knowledge" | "order" | "ticket";
 
 type Citation = {
   chunk_id: string;
@@ -230,7 +231,12 @@ function App() {
           >
             订单处理
           </button>
-          <button className="menu-item disabled">工单中心</button>
+          <button
+            className={`menu-item ${activePage === "ticket" ? "active" : ""}`}
+            onClick={() => setActivePage("ticket")}
+          >
+            工单中心
+          </button>
           <button className="menu-item disabled">数据分析</button>
           <button className="menu-item disabled">文档管理</button>
           <button className="menu-item disabled">Bad Case</button>
@@ -241,11 +247,13 @@ function App() {
       <main className="main">
         <header className="topbar">
           <div>
-            <h1>{activePage === "knowledge" ? "知识检索" : "订单处理台"}</h1>
+            <h1>{activePage === "knowledge" ? "知识检索" : activePage === "order" ? "订单处理台" : "工单中心"}</h1>
             <p>
               {activePage === "knowledge"
                 ? "面向客服场景的售后规则、补偿标准、SOP 检索与引用返回。"
-                : "输入订单号，聚合订单、物流、退款、历史工单，并生成推荐处理方案。"}
+                : activePage === "order"
+                ? "输入订单号，聚合订单、物流、退款、历史工单，并生成推荐处理方案。"
+                : "自动创建、分派、升级和流转售后工单。"}
             </p>
           </div>
           <button className="secondary-button" onClick={checkHealth} disabled={healthLoading}>
@@ -513,6 +521,7 @@ function App() {
             )}
           </>
         )}
+        {activePage === "ticket" && <TicketCenter />}
       </main>
     </div>
   );
