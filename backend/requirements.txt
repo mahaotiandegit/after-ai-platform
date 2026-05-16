@@ -8,3 +8,5 @@ python-dotenv
 redis
 alembic
 pgvector
+
+psycopg2-binary==2.9.10

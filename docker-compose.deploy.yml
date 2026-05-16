@@ -1,0 +1,63 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: after-ai-postgres
+    environment:
+      POSTGRES_DB: after_ai_platform
+      POSTGRES_USER: after_ai
+      POSTGRES_PASSWORD: after_ai_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - after_ai_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U after_ai -d after_ai_platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: after-ai-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: after-ai-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql://after_ai:after_ai_password@postgres:5432/after_ai_platform
+      REDIS_URL: redis://redis:6379/0
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "8000:8000"
+    command: >
+      sh -c "
+        alembic upgrade head &&
+        python scripts/seed_demo_data.py || true;
+        uvicorn app.main:app --host 0.0.0.0 --port 8000
+      "
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: after-ai-frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+
+volumes:
+  after_ai_postgres_data:
