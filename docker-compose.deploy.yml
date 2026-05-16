@@ -40,6 +40,8 @@ services:
       PYTHONUNBUFFERED: "1"
     ports:
       - "8000:8000"
+    volumes:
+      - ./backend/uploads:/app/uploads
     command: >
       sh -c "
         alembic upgrade head &&

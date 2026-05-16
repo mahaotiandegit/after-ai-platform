@@ -11,3 +11,4 @@ frontend/.vite/
 backend/.venv/
 *.pyc
 .env.*
+backend/uploads/

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type GenericRow = Record<string, string | number | boolean | null | object>;
 
@@ -56,6 +56,11 @@ function GenericTable({ rows, maxColumns = 8 }: { rows: GenericRow[]; maxColumns
 export function DocumentCenter() {
   const [data, setData] = useState<ListResponse | null>(null);
   const [error, setError] = useState("");
+  const [uploadMessage, setUploadMessage] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [uploadTitle, setUploadTitle] = useState("");
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   async function loadData() {
     setError("");
@@ -72,6 +77,66 @@ export function DocumentCenter() {
     }
   }
 
+  async function uploadDocument() {
+    setError("");
+    setUploadMessage("");
+
+    if (!uploadFile) {
+      setError("请先选择要上传的文档。");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", uploadFile);
+    if (uploadTitle.trim()) {
+      formData.append("title", uploadTitle.trim());
+    }
+
+    setUploading(true);
+
+    try {
+      const response = await fetch("/api/v1/documents/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const responseText = await response.text();
+      let result: any = null;
+
+      try {
+        result = responseText ? JSON.parse(responseText) : null;
+      } catch {
+        result = responseText;
+      }
+
+      if (!response.ok) {
+        const detail =
+          typeof result === "object" && result !== null && "detail" in result
+            ? String(result.detail)
+            : String(responseText || "未知错误");
+
+        throw new Error(`上传失败：HTTP ${response.status} ${detail}`);
+      }
+
+      setUploadMessage(
+        `上传成功：${result?.title ?? uploadFile.name}，已生成 ${result?.chunk_count ?? "-"} 个切块。`
+      );
+
+      setUploadTitle("");
+      setUploadFile(null);
+
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "未知错误");
+    } finally {
+      setUploading(false);
+    }
+  }
+
   useEffect(() => {
     loadData();
   }, []);
@@ -79,12 +144,45 @@ export function DocumentCenter() {
   return (
     <>
       {error && <div className="error-box">{error}</div>}
+      {uploadMessage && <div className="success-box">{uploadMessage}</div>}
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>文档上传</h2>
+            <p>上传售后规则、SOP、活动政策等知识库文档。当前 MVP 先支持 txt / md / csv / json / log。</p>
+          </div>
+        </div>
+
+        <div className="query-box">
+          <input
+            value={uploadTitle}
+            onChange={(event) => setUploadTitle(event.target.value)}
+            placeholder="文档标题，可不填；不填时默认使用文件名"
+          />
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".txt,.md,.markdown,.csv,.json,.log"
+            onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
+          />
+
+          <button onClick={uploadDocument} disabled={uploading || !uploadFile}>
+            {uploading ? "上传解析中..." : "上传并解析"}
+          </button>
+        </div>
+
+        <p className="hint-text">
+          上传成功后，系统会写入 documents 表，自动解析文本，切块写入 document_chunks 表，并进入知识检索。
+        </p>
+      </section>
 
       <section className="panel">
         <div className="panel-header">
           <div>
             <h2>文档管理</h2>
-            <p>展示已入库文档、文件类型、索引状态和切块数量。当前先做列表展示，上传解析后续接入。</p>
+            <p>展示已入库文档、文件类型、索引状态和切块数量。</p>
           </div>
           <button className="secondary-button" onClick={loadData}>刷新</button>
         </div>
