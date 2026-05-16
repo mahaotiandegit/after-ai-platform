@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.orders import router as orders_router
 from app.api.v1.system import router as system_router
@@ -15,6 +16,17 @@ app = FastAPI(
     description="E-commerce aftersales knowledge and ticket automation platform",
     version="0.1.0",
 )
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 app.add_middleware(AIAuditMiddleware)
 
 

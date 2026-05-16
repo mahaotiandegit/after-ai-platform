@@ -5,3 +5,9 @@ __pycache__/
 .env
 .acceptance_uvicorn.log
 .acceptance_uvicorn.pid
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+backend/.venv/
+*.pyc
+.env.*
