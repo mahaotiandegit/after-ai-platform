@@ -63,3 +63,7 @@ app.include_router(bad_cases.router, prefix="/api/v1")
 # ai quality
 from app.api.v1 import ai_quality
 app.include_router(ai_quality.router, prefix="/api/v1/ai-quality")
+
+# order workbench
+from app.api.v1 import order_workbench
+app.include_router(order_workbench.router, prefix="/api/v1")
