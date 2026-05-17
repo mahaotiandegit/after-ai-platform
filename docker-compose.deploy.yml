@@ -42,6 +42,12 @@ services:
       LLM_MODEL: ${LLM_MODEL:-local-template}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
+      # Embedding / Hybrid Search
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local_hash}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-local-hash-384}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-384}
+      HYBRID_KEYWORD_WEIGHT: ${HYBRID_KEYWORD_WEIGHT:-0.55}
+      HYBRID_VECTOR_WEIGHT: ${HYBRID_VECTOR_WEIGHT:-0.45}
     ports:
       - "8000:8000"
     volumes:
