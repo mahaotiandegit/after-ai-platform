@@ -38,6 +38,10 @@ services:
       DATABASE_URL: postgresql://after_ai:after_ai_password@postgres:5432/after_ai_platform
       REDIS_URL: redis://redis:6379/0
       PYTHONUNBUFFERED: "1"
+      LLM_PROVIDER: ${LLM_PROVIDER:-local}
+      LLM_MODEL: ${LLM_MODEL:-local-template}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
     ports:
       - "8000:8000"
     volumes:

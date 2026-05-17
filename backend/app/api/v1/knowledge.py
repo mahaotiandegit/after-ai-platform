@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.db.deps import get_db
 from app.schemas.knowledge import KnowledgeSearchOut
 from app.services.knowledge_search_service import search_knowledge
+from app.services.llm_gateway import generate_rag_answer
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
@@ -40,6 +41,11 @@ class KnowledgeAskResponse(BaseModel):
     citations: list[KnowledgeHit] = Field(default_factory=list)
     hits: list[KnowledgeHit] = Field(default_factory=list)
     qa_log_id: str | None = None
+
+    provider:str="local"
+    model:str="local-template"
+    used_llm:bool=False
+    fallback_reason:str=""
 
 
 def _unique(items: list[str]) -> list[str]:
@@ -186,6 +192,12 @@ def ask_knowledge_api(payload: KnowledgeAskRequest, db: Session = Depends(get_db
         search_result = current_result
 
     hits = search_result.get("hits", [])
+    fallback_answer=_build_answer(payload.question,hits)
+    llm_result = generate_rag_answer(
+        question=payload.question,
+        chunks=hits,
+        fallback_answer=fallback_answer,
+    )
     answer = _build_answer(payload.question, hits)
     latency_ms = int((time.perf_counter() - started) * 1000)
 
@@ -205,4 +217,8 @@ def ask_knowledge_api(payload: KnowledgeAskRequest, db: Session = Depends(get_db
         "citations": hits,
         "hits": hits,
         "qa_log_id": qa_log_id,
+        "provider": llm_result["provider"],
+        "model": llm_result["model"],
+        "used_llm": llm_result["used_llm"],
+        "fallback_reason": llm_result.get("fallback_reason", ""),
     }

@@ -12,3 +12,24 @@ backend/.venv/
 *.pyc
 .env.*
 backend/uploads/
+
+# local runtime files
+tmp_uploads/
+backend/tmp_uploads/
+backend/uploads/
+backend/nohup.out
+backend/.acceptance_uvicorn.pid
+backend/.acceptance_uvicorn.log
+
+# frontend build/runtime
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# env files
+.env
+.env.*
+backend/.env
+backend/.env.*
+frontend/.env
+frontend/.env.*
