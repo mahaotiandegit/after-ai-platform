@@ -55,9 +55,12 @@ function GenericTable({ rows, maxColumns = 8 }: { rows: GenericRow[]; maxColumns
 
 export function DocumentCenter() {
   const [data, setData] = useState<ListResponse | null>(null);
+  const [chunkData, setChunkData] = useState<ListResponse | null>(null);
+  const [selectedDocument, setSelectedDocument] = useState<GenericRow | null>(null);
   const [error, setError] = useState("");
   const [uploadMessage, setUploadMessage] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [loadingChunks, setLoadingChunks] = useState(false);
   const [uploadTitle, setUploadTitle] = useState("");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -77,6 +80,33 @@ export function DocumentCenter() {
     }
   }
 
+  async function loadChunks(document: GenericRow) {
+    const documentId = String(document.id ?? "");
+
+    if (!documentId) {
+      setError("文档 ID 为空，无法查看切块。");
+      return;
+    }
+
+    setError("");
+    setLoadingChunks(true);
+    setSelectedDocument(document);
+
+    try {
+      const response = await fetch(`/api/v1/ops/documents/${documentId}/chunks`);
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`加载切块失败：HTTP ${response.status} ${text}`);
+      }
+
+      setChunkData((await response.json()) as ListResponse);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "未知错误");
+    } finally {
+      setLoadingChunks(false);
+    }
+  }
+
   async function uploadDocument() {
     setError("");
     setUploadMessage("");
@@ -88,6 +118,7 @@ export function DocumentCenter() {
 
     const formData = new FormData();
     formData.append("file", uploadFile);
+
     if (uploadTitle.trim()) {
       formData.append("title", uploadTitle.trim());
     }
@@ -124,6 +155,8 @@ export function DocumentCenter() {
 
       setUploadTitle("");
       setUploadFile(null);
+      setChunkData(null);
+      setSelectedDocument(null);
 
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
@@ -141,6 +174,9 @@ export function DocumentCenter() {
     loadData();
   }, []);
 
+  const documents = data?.items ?? [];
+  const chunks = chunkData?.items ?? [];
+
   return (
     <>
       {error && <div className="error-box">{error}</div>}
@@ -150,7 +186,7 @@ export function DocumentCenter() {
         <div className="panel-header">
           <div>
             <h2>文档上传</h2>
-            <p>上传售后规则、SOP、活动政策等知识库文档。当前 MVP 先支持 txt / md / csv / json / log。</p>
+            <p>上传售后规则、SOP、活动政策等知识库文档。当前支持 txt / md / csv / json / log / pdf / docx / xlsx。</p>
           </div>
         </div>
 
@@ -164,7 +200,7 @@ export function DocumentCenter() {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".txt,.md,.markdown,.csv,.json,.log"
+            accept=".txt,.md,.markdown,.csv,.json,.log,.pdf,.docx,.xlsx"
             onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
           />
 
@@ -182,7 +218,7 @@ export function DocumentCenter() {
         <div className="panel-header">
           <div>
             <h2>文档管理</h2>
-            <p>展示已入库文档、文件类型、索引状态和切块数量。</p>
+            <p>展示已入库文档、文件类型、索引状态和切块数量，可查看解析后的切块内容。</p>
           </div>
           <button className="secondary-button" onClick={loadData}>刷新</button>
         </div>
@@ -194,19 +230,89 @@ export function DocumentCenter() {
           </div>
           <div className="metric-card">
             <span>已索引文档</span>
-            <strong>{data?.items.filter((item) => item.status === "indexed").length ?? "-"}</strong>
+            <strong>{documents.filter((item) => item.status === "indexed").length}</strong>
           </div>
           <div className="metric-card">
             <span>总切块数</span>
-            <strong>{data?.items.reduce((sum, item) => sum + Number(item.chunk_count ?? 0), 0) ?? "-"}</strong>
+            <strong>{documents.reduce((sum, item) => sum + Number(item.chunk_count ?? 0), 0)}</strong>
           </div>
         </section>
 
-        <GenericTable rows={data?.items ?? []} />
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>title</th>
+                <th>file_name</th>
+                <th>file_type</th>
+                <th>status</th>
+                <th>chunk_count</th>
+                <th>created_at</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {documents.length === 0 && (
+                <tr>
+                  <td colSpan={7}>暂无数据</td>
+                </tr>
+              )}
+
+              {documents.map((item) => (
+                <tr key={String(item.id)}>
+                  <td>{valueText(item.title)}</td>
+                  <td>{valueText(item.file_name)}</td>
+                  <td>{valueText(item.file_type)}</td>
+                  <td>{valueText(item.status)}</td>
+                  <td>{valueText(item.chunk_count)}</td>
+                  <td>{valueText(item.created_at)}</td>
+                  <td>
+                    <button className="secondary-button" onClick={() => loadChunks(item)}>
+                      查看切块
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>切块预览</h2>
+            <p>
+              {selectedDocument
+                ? `当前文档：${valueText(selectedDocument.title)}，共 ${chunkData?.total ?? "-"} 个切块。`
+                : "选择一篇文档后，可以查看系统解析入库的 document_chunks 内容。"}
+            </p>
+          </div>
+        </div>
+
+        {loadingChunks && <p className="hint-text">正在加载切块...</p>}
+
+        {!loadingChunks && chunks.length === 0 && (
+          <div className="empty-box">暂无切块内容，请先点击上方文档的“查看切块”。</div>
+        )}
+
+        {!loadingChunks && chunks.map((chunk) => (
+          <article className="chunk-card" key={String(chunk.id)}>
+            <div className="chunk-meta">
+              <span>chunk_index: {valueText(chunk.chunk_index)}</span>
+              <span>policy_code: {valueText(chunk.policy_code)}</span>
+              <span>section: {valueText(chunk.section)}</span>
+              <span>parser: {valueText(chunk.parser)}</span>
+              <span>token_count: {valueText(chunk.token_count)}</span>
+            </div>
+            <pre className="chunk-content">{valueText(chunk.content)}</pre>
+          </article>
+        ))}
       </section>
     </>
   );
 }
+
 
 export function BadCaseCenter() {
   const [data, setData] = useState<ListResponse | null>(null);

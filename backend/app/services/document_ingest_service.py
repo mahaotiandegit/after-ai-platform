@@ -3,8 +3,12 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from io import BytesIO
 from pathlib import Path
 
+from docx import Document as DocxDocument
+from openpyxl import load_workbook
+from pypdf import PdfReader
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -18,6 +22,9 @@ SUPPORTED_EXTENSIONS = {
     ".csv",
     ".json",
     ".log",
+    ".pdf",
+    ".docx",
+    ".xlsx",
 }
 
 
@@ -45,15 +52,14 @@ def _decode_text(data: bytes) -> str:
     raise ValueError("文件编码无法识别，请先转成 UTF-8 文本后再上传。")
 
 
-def _extract_text(filename: str, data: bytes) -> str:
+def _normalize_text(content: str) -> str:
+    content = content.replace("\r\n", "\n").replace("\r", "\n")
+    content = re.sub(r"\n{3,}", "\n\n", content)
+    return content.strip()
+
+
+def _extract_plain_text(filename: str, data: bytes) -> str:
     suffix = Path(filename).suffix.lower()
-
-    if suffix not in SUPPORTED_EXTENSIONS:
-        supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
-        raise UnsupportedDocumentTypeError(
-            f"当前 MVP 先支持纯文本类文件：{supported}。PDF/Word 后续单独接解析器。"
-        )
-
     content = _decode_text(data)
 
     if suffix == ".json":
@@ -63,9 +69,141 @@ def _extract_text(filename: str, data: bytes) -> str:
         except Exception:
             pass
 
-    content = content.replace("\r\n", "\n").replace("\r", "\n")
-    content = re.sub(r"\n{3,}", "\n\n", content)
-    return content.strip()
+    return _normalize_text(content)
+
+
+def _extract_pdf_text(data: bytes) -> str:
+    try:
+        reader = PdfReader(BytesIO(data))
+    except Exception as exc:
+        raise ValueError(f"PDF 文件读取失败：{exc}") from exc
+
+    if getattr(reader, "is_encrypted", False):
+        raise ValueError("暂不支持加密 PDF，请先解除密码后上传。")
+
+    pages: list[str] = []
+
+    for index, page in enumerate(reader.pages, start=1):
+        try:
+            page_text = page.extract_text() or ""
+        except Exception:
+            page_text = ""
+
+        page_text = _normalize_text(page_text)
+
+        if page_text:
+            pages.append(f"[第 {index} 页]\n{page_text}")
+
+    content = "\n\n".join(pages).strip()
+
+    if not content:
+        raise ValueError("PDF 没有解析出文本。可能是扫描版 PDF，后续需要接 OCR。")
+
+    return content
+
+
+def _extract_docx_text(data: bytes) -> str:
+    try:
+        doc = DocxDocument(BytesIO(data))
+    except Exception as exc:
+        raise ValueError(f"Word docx 文件读取失败：{exc}") from exc
+
+    parts: list[str] = []
+
+    for paragraph in doc.paragraphs:
+        text_value = paragraph.text.strip()
+        if text_value:
+            parts.append(text_value)
+
+    for table_index, table in enumerate(doc.tables, start=1):
+        rows: list[str] = []
+
+        for row in table.rows:
+            cells = [
+                cell.text.strip().replace("\n", " ")
+                for cell in row.cells
+            ]
+
+            while cells and not cells[-1]:
+                cells.pop()
+
+            if any(cells):
+                rows.append(" | ".join(cells))
+
+        if rows:
+            parts.append(f"[表格 {table_index}]\n" + "\n".join(rows))
+
+    content = "\n\n".join(parts).strip()
+
+    if not content:
+        raise ValueError("Word docx 没有解析出有效文本。")
+
+    return _normalize_text(content)
+
+
+def _extract_xlsx_text(data: bytes) -> str:
+    try:
+        workbook = load_workbook(
+            filename=BytesIO(data),
+            data_only=True,
+            read_only=True,
+        )
+    except Exception as exc:
+        raise ValueError(f"Excel xlsx 文件读取失败：{exc}") from exc
+
+    sheets: list[str] = []
+
+    for sheet in workbook.worksheets:
+        rows: list[str] = []
+
+        for row_index, row in enumerate(sheet.iter_rows(values_only=True), start=1):
+            values: list[str] = []
+
+            for value in row:
+                if value is None:
+                    values.append("")
+                else:
+                    values.append(str(value).strip())
+
+            while values and not values[-1]:
+                values.pop()
+
+            if any(values):
+                rows.append(f"R{row_index}: " + " | ".join(values))
+
+        if rows:
+            sheets.append(f"[工作表：{sheet.title}]\n" + "\n".join(rows))
+
+    content = "\n\n".join(sheets).strip()
+
+    if not content:
+        raise ValueError("Excel xlsx 没有解析出有效文本。")
+
+    return _normalize_text(content)
+
+
+def _extract_text(filename: str, data: bytes) -> str:
+    suffix = Path(filename).suffix.lower()
+
+    if suffix not in SUPPORTED_EXTENSIONS:
+        supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
+        raise UnsupportedDocumentTypeError(
+            f"当前支持文件类型：{supported}。旧版 .doc / .xls 暂不支持，请先另存为 .docx / .xlsx。"
+        )
+
+    if suffix in {".txt", ".md", ".markdown", ".csv", ".json", ".log"}:
+        return _extract_plain_text(filename, data)
+
+    if suffix == ".pdf":
+        return _extract_pdf_text(data)
+
+    if suffix == ".docx":
+        return _extract_docx_text(data)
+
+    if suffix == ".xlsx":
+        return _extract_xlsx_text(data)
+
+    raise UnsupportedDocumentTypeError(f"暂不支持的文件类型：{suffix}")
 
 
 def _split_text(content: str, max_chars: int = 900, overlap: int = 120) -> list[str]:
@@ -179,6 +317,7 @@ def ingest_document_bytes(
                 "policy_code": f"UPLOAD-{index + 1:03d}",
                 "original_file_name": safe_filename,
                 "content_type": content_type,
+                "parser": file_type,
             }
 
             db.execute(
