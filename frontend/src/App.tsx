@@ -2,10 +2,16 @@ import { useState } from "react";
 import "./App.css";
 import TicketCenter from "./TicketCenter";
 import AnalyticsCenter from "./AnalyticsCenter";
-import { DocumentCenter, BadCaseCenter, MonitorCenter } from "./OpsPages";
-
-type PageKey = "knowledge" | "order" | "ticket" | "analytics" | "documents" | "badcase" | "monitor";
-
+import { DocumentCenter, BadCaseCenter, MonitorCenter, AftersaleAgentCenter } from "./OpsPages";
+type PageKey =
+  | "knowledge"
+  | "order"
+  | "ticket"
+  | "analytics"
+  | "documents"
+  | "agent"
+  | "badcase"
+  | "monitor";
 type Citation = {
   chunk_id: string;
   document_id: string;
@@ -252,6 +258,12 @@ function App() {
             文档管理
           </button>
           <button
+  className={`menu-item ${activePage === "agent" ? "active" : ""}`}
+  onClick={() => setActivePage("agent")}
+>
+  售后 Agent
+</button>
+          <button
             className={`menu-item ${activePage === "badcase" ? "active" : ""}`}
             onClick={() => setActivePage("badcase")}
           >
@@ -269,8 +281,23 @@ function App() {
       <main className="main">
         <header className="topbar">
           <div>
-            <h1>{activePage === "knowledge" ? "知识检索" : activePage === "order" ? "订单处理台" : activePage === "ticket" ? "工单中心" : activePage === "analytics" ? "数据分析" : activePage === "documents" ? "文档管理" : activePage === "badcase" ? "Bad Case" : "系统监控"}</h1>
-            <p>
+<h1>
+  {activePage === "knowledge"
+    ? "知识检索"
+    : activePage === "order"
+    ? "订单处理台"
+    : activePage === "ticket"
+    ? "工单中心"
+    : activePage === "analytics"
+    ? "数据分析"
+    : activePage === "documents"
+    ? "文档管理"
+    : activePage === "agent"
+    ? "售后 Agent"
+    : activePage === "badcase"
+    ? "Bad Case"
+    : "系统监控"}
+</h1>            <p>
               {activePage === "knowledge"
                 ? "面向客服场景的售后规则、补偿标准、SOP 检索与引用返回。"
                 : activePage === "order"
@@ -280,10 +307,12 @@ function App() {
                 : activePage === "analytics"
                 ? "面向客服组长和运营的售后趋势分析与自然语言问数。"
                 : activePage === "documents"
-                ? "维护售后规则、SOP、活动政策等知识库文档。"
-                : activePage === "badcase"
-                ? "复盘 AI 误判、低质量回答和人工反馈样本。"
-                : "查看系统健康、核心表数量和 AI 调用日志。"}
+? "维护售后规则、SOP、活动政策等知识库文档。"
+: activePage === "agent"
+? "把知识检索、订单查询、工单创建和运营问数串成一个售后处理工作流。"
+: activePage === "badcase"
+? "复盘 AI 误判、低质量回答和人工反馈样本。"
+: "查看系统健康、核心表数量和 AI 调用日志。"}
             </p>
           </div>
           <button className="secondary-button" onClick={checkHealth} disabled={healthLoading}>
@@ -554,6 +583,7 @@ function App() {
         {activePage === "ticket" && <TicketCenter />}
         {activePage === "analytics" && <AnalyticsCenter />}
         {activePage === "documents" && <DocumentCenter />}
+        {activePage === "agent" && <AftersaleAgentCenter />}
         {activePage === "badcase" && <BadCaseCenter />}
         {activePage === "monitor" && <MonitorCenter />}
       </main>

@@ -313,6 +313,205 @@ export function DocumentCenter() {
   );
 }
 
+type AgentToolCall = {
+  tool_name: string;
+  purpose: string;
+  success: boolean;
+  latency_ms: number;
+  data?: unknown;
+  error?: string | null;
+};
+
+type AftersaleAgentResponse = {
+  question: string;
+  order_no?: string | null;
+  route_intents: string[];
+  final_answer: string;
+  action_plan: string[];
+  risk_flags: string[];
+  tool_calls: AgentToolCall[];
+  created_ticket_no?: string | null;
+  used_llm: boolean;
+  provider: string;
+  model: string;
+};
+
+export function AftersaleAgentCenter() {
+  const [question, setQuestion] = useState("用户说包裹三天没更新，想要补偿，客服应该怎么处理？");
+  const [orderNo, setOrderNo] = useState("ORDER-20260515-0001");
+  const [autoCreateTicket, setAutoCreateTicket] = useState(false);
+  const [includeAnalytics, setIncludeAnalytics] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<AftersaleAgentResponse | null>(null);
+  const [error, setError] = useState("");
+
+  async function runAgent() {
+    setError("");
+    setLoading(true);
+
+    try {
+      const response = await fetch("/api/v1/agent/aftersale", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          question,
+          order_no: orderNo.trim() || null,
+          top_k: 5,
+          auto_create_ticket: autoCreateTicket,
+          include_analytics: includeAnalytics,
+        }),
+      });
+
+      const responseText = await response.text();
+      const data = responseText ? JSON.parse(responseText) : null;
+
+      if (!response.ok) {
+        throw new Error(`售后 Agent 调用失败：HTTP ${response.status} ${responseText}`);
+      }
+
+      setResult(data as AftersaleAgentResponse);
+    } catch (err) {
+      setResult(null);
+      setError(err instanceof Error ? err.message : "未知错误");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <>
+      {error && <div className="error-box">{error}</div>}
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>售后 Agent</h2>
+            <p>将知识库 RAG、订单上下文、工单创建和运营问数串成一个售后处理工作流。</p>
+          </div>
+        </div>
+
+        <div className="query-box">
+          <textarea
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+            placeholder="例如：用户说包裹三天没更新，想要补偿，客服应该怎么处理？"
+          />
+
+          <input
+            value={orderNo}
+            onChange={(event) => setOrderNo(event.target.value)}
+            placeholder="订单号，例如：ORDER-20260515-0001，可为空"
+          />
+
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={autoCreateTicket}
+              onChange={(event) => setAutoCreateTicket(event.target.checked)}
+            />
+            <span>自动创建工单</span>
+          </label>
+
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={includeAnalytics}
+              onChange={(event) => setIncludeAnalytics(event.target.checked)}
+            />
+            <span>同时调用运营问数</span>
+          </label>
+
+          <button onClick={runAgent} disabled={loading || !question.trim()}>
+            {loading ? "Agent 执行中..." : "运行售后 Agent"}
+          </button>
+        </div>
+      </section>
+
+      {result && (
+        <>
+          <section className="result-grid">
+            <div className="answer-card">
+              <div className="card-title">Agent 最终建议</div>
+
+              <div className="meta-row">
+                <span>Provider：{result.provider}</span>
+                <span>Model：{result.model}</span>
+                <span>Used LLM：{String(result.used_llm)}</span>
+                <span>工单：{result.created_ticket_no ?? "-"}</span>
+              </div>
+
+              <p className="answer-text">{result.final_answer}</p>
+            </div>
+
+            <div className="citation-card">
+              <div className="card-title">路由意图</div>
+              <div className="tag-row">
+                {result.route_intents.map((item) => (
+                  <span className="tag" key={item}>{item}</span>
+                ))}
+              </div>
+
+              <div className="card-title margin-top">风险提示</div>
+              {result.risk_flags.length === 0 && <div className="empty">暂无风险提示</div>}
+              {result.risk_flags.map((item) => (
+                <div className="warning-box" key={item}>{item}</div>
+              ))}
+            </div>
+          </section>
+
+          <section className="panel">
+            <div className="panel-header">
+              <div>
+                <h2>下一步动作</h2>
+                <p>客服可以按下面动作执行，并根据风险提示决定是否升级组长。</p>
+              </div>
+            </div>
+
+            {result.action_plan.length === 0 && <div className="empty-box">暂无动作建议</div>}
+
+            {result.action_plan.map((item, index) => (
+              <article className="chunk-card" key={`${index}-${item}`}>
+                <div className="chunk-meta">
+                  <span>step: {index + 1}</span>
+                </div>
+                <p>{item}</p>
+              </article>
+            ))}
+          </section>
+
+          <section className="panel">
+            <div className="panel-header">
+              <div>
+                <h2>Tool Calling 执行轨迹</h2>
+                <p>展示 Agent 实际调用了哪些工具、耗时、成功状态和返回数据。</p>
+              </div>
+            </div>
+
+            {result.tool_calls.map((tool) => (
+              <article className="chunk-card" key={tool.tool_name}>
+                <div className="chunk-meta">
+                  <span>tool: {tool.tool_name}</span>
+                  <span>success: {String(tool.success)}</span>
+                  <span>latency_ms: {tool.latency_ms}</span>
+                </div>
+
+                <p>{tool.purpose}</p>
+
+                {tool.error && <div className="error-box">{tool.error}</div>}
+
+                <pre className="chunk-content">
+                  {JSON.stringify(tool.data, null, 2)}
+                </pre>
+              </article>
+            ))}
+          </section>
+        </>
+      )}
+    </>
+  );
+}
 
 export function BadCaseCenter() {
   const [data, setData] = useState<ListResponse | null>(null);

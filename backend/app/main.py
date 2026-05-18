@@ -76,3 +76,7 @@ app.include_router(documents.router, prefix="/api/v1")
 # ops pages
 from app.api.v1 import ops
 app.include_router(ops.router, prefix="/api/v1")
+
+# aftersale agent
+from app.api.v1 import agent
+app.include_router(agent.router, prefix="/api/v1")
