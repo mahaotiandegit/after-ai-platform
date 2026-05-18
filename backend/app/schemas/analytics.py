@@ -16,6 +16,12 @@ class AnalyticsAskResponse(BaseModel):
     rows: list[dict[str, Any]]
     summary: str
 
+    safe: bool = True
+    blocked_reason: str | None = None
+    tables_used: list[str] = Field(default_factory=list)
+    applied_limit: int | None = None
+    query_log_id: str | None = None
+
 class AnalyticsOverviewOut(BaseModel):
     class Config:
         extra = "allow"

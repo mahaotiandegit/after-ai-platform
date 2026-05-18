@@ -47,6 +47,9 @@ class KnowledgeAskResponse(BaseModel):
     used_llm:bool=False
     fallback_reason:str=""
 
+    retrieval_mode: str = "keyword"
+    embedding_ready: bool = False
+    vector_candidate_count: int = 0
 
 def _unique(items: list[str]) -> list[str]:
     result: list[str] = []
@@ -221,4 +224,7 @@ def ask_knowledge_api(payload: KnowledgeAskRequest, db: Session = Depends(get_db
         "model": llm_result["model"],
         "used_llm": llm_result["used_llm"],
         "fallback_reason": llm_result.get("fallback_reason", ""),
+        "retrieval_mode": search_result.get("retrieval_mode", "keyword"),
+        "embedding_ready": bool(search_result.get("embedding_ready", False)),
+        "vector_candidate_count": int(search_result.get("vector_candidate_count", 0)),
     }
