@@ -40,3 +40,15 @@ frontend/dist/
 .DS_Store
 .vscode/
 .idea/
+
+# Runtime temp files
+*.pid
+.acceptance_uvicorn.pid
+backend/.acceptance_uvicorn.pid
+tmp_uploads/
+backend/tmp_uploads/
+
+# Frontend env files
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
