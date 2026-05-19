@@ -2,8 +2,10 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.db.deps import get_db
-from app.schemas.feedback import FeedbackCreateIn, FeedbackListOut, FeedbackOut
-from app.services.feedback_service import create_feedback, list_feedbacks
+from uuid import UUID
+
+from app.schemas.feedback import FeedbackCreateIn, FeedbackListOut, FeedbackOut, FeedbackStatusUpdateIn
+from app.services.feedback_service import create_feedback, list_feedbacks, update_feedback_status
 
 router = APIRouter(prefix="/feedbacks", tags=["feedbacks"])
 
@@ -35,4 +37,17 @@ def get_feedbacks(
         status=status,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.patch("/{feedback_id}/status", response_model=FeedbackOut)
+def change_feedback_status(
+    feedback_id: UUID,
+    payload: FeedbackStatusUpdateIn,
+    db: Session = Depends(get_db),
+):
+    return update_feedback_status(
+        db=db,
+        feedback_id=feedback_id,
+        status=payload.status,
     )

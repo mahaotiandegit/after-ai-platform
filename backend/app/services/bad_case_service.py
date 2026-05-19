@@ -263,6 +263,180 @@ def create_bad_case_from_ai_log(
 
     return _row_to_dict(dict(row))
 
+def create_bad_case_from_feedback(
+    *,
+    db: Session,
+    feedback_id: str,
+    correction: str | None = None,
+    root_cause: str | None = None,
+    priority: str = "medium",
+    tags: list[str] | None = None,
+) -> dict[str, Any]:
+    ensure_bad_cases_table(db)
+
+    existing = db.execute(
+        text(
+            """
+            SELECT
+                id,
+                source_type,
+                source_id,
+                scene,
+                question,
+                ai_output,
+                correction,
+                root_cause,
+                priority,
+                status,
+                tags,
+                created_at,
+                updated_at
+            FROM bad_cases
+            WHERE source_type = 'feedback'
+              AND source_id = :feedback_id
+            LIMIT 1
+            """
+        ),
+        {
+            "feedback_id": feedback_id,
+        },
+    ).mappings().first()
+
+    if existing is not None:
+        return _row_to_dict(dict(existing))
+
+    feedback = db.execute(
+        text(
+            """
+            SELECT
+                f.id,
+                f.qa_log_id,
+                f.rating,
+                f.comment,
+                f.status,
+                q.question,
+                q.answer,
+                q.citations
+            FROM feedbacks f
+            LEFT JOIN qa_logs q ON q.id = f.qa_log_id
+            WHERE f.id = :feedback_id
+            """
+        ),
+        {
+            "feedback_id": feedback_id,
+        },
+    ).mappings().first()
+
+    if feedback is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"feedback not found: {feedback_id}",
+        )
+
+    rating = int(feedback["rating"] or 0)
+    auto_tags = ["feedback", f"rating_{rating}"]
+
+    if rating <= 2:
+        auto_tags.append("low_rating")
+
+    if tags:
+        auto_tags.extend(tags)
+
+    question = feedback["question"] or feedback["comment"] or "未关联 QA 日志的反馈"
+
+    ai_output = {
+        "answer": feedback["answer"],
+        "citations": _json_loads(feedback["citations"]),
+        "rating": rating,
+        "comment": feedback["comment"],
+        "qa_log_id": str(feedback["qa_log_id"]) if feedback["qa_log_id"] else None,
+    }
+
+    bad_case_id = str(uuid.uuid4())
+
+    row = db.execute(
+        text(
+            """
+            INSERT INTO bad_cases (
+                id,
+                source_type,
+                source_id,
+                scene,
+                question,
+                ai_output,
+                correction,
+                root_cause,
+                priority,
+                status,
+                tags,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                :id,
+                :source_type,
+                :source_id,
+                :scene,
+                :question,
+                CAST(:ai_output AS JSONB),
+                :correction,
+                :root_cause,
+                :priority,
+                :status,
+                CAST(:tags AS JSONB),
+                :created_at,
+                :updated_at
+            )
+            RETURNING
+                id,
+                source_type,
+                source_id,
+                scene,
+                question,
+                ai_output,
+                correction,
+                root_cause,
+                priority,
+                status,
+                tags,
+                created_at,
+                updated_at
+            """
+        ),
+        {
+            "id": bad_case_id,
+            "source_type": "feedback",
+            "source_id": feedback_id,
+            "scene": "knowledge_feedback",
+            "question": question,
+            "ai_output": _json_dumps(ai_output),
+            "correction": correction,
+            "root_cause": root_cause,
+            "priority": priority,
+            "status": "open",
+            "tags": _json_dumps(auto_tags),
+            "created_at": _now(),
+            "updated_at": _now(),
+        },
+    ).mappings().first()
+
+    db.execute(
+        text(
+            """
+            UPDATE feedbacks
+            SET status = 'converted'
+            WHERE id = :feedback_id
+            """
+        ),
+        {
+            "feedback_id": feedback_id,
+        },
+    )
+
+    db.commit()
+
+    return _row_to_dict(dict(row))
+
 
 def list_bad_cases(
     *,

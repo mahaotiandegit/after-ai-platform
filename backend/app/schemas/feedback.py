@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -21,8 +22,13 @@ class FeedbackOut(BaseModel):
     comment: str | None = None
     status: str
     created_at: datetime
+    question: str | None = None
+    answer: str | None = None
 
 
 class FeedbackListOut(BaseModel):
     total: int
     items: list[FeedbackOut]
+
+class FeedbackStatusUpdateIn(BaseModel):
+    status: Literal["new", "reviewing", "converted", "ignored", "resolved"]

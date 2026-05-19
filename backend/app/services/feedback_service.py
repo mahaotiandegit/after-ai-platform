@@ -94,7 +94,7 @@ def list_feedbacks(
     }
 
     if status:
-        where_clauses.append("status = :status")
+        where_clauses.append("f.status = :status")
         params["status"] = status
 
     where_sql = ""
@@ -105,7 +105,7 @@ def list_feedbacks(
         text(
             f"""
             SELECT COUNT(*) AS total
-            FROM feedbacks
+            FROM feedbacks f
             {where_sql}
             """
         ),
@@ -116,17 +116,20 @@ def list_feedbacks(
         text(
             f"""
             SELECT
-                id,
-                qa_log_id,
-                ticket_id,
-                user_id,
-                rating,
-                comment,
-                status,
-                created_at
-            FROM feedbacks
+                f.id,
+                f.qa_log_id,
+                f.ticket_id,
+                f.user_id,
+                f.rating,
+                f.comment,
+                f.status,
+                f.created_at,
+                q.question,
+                q.answer
+            FROM feedbacks f
+            LEFT JOIN qa_logs q ON q.id = f.qa_log_id
             {where_sql}
-            ORDER BY created_at DESC
+            ORDER BY f.created_at DESC
             LIMIT :limit OFFSET :offset
             """
         ),
@@ -137,3 +140,48 @@ def list_feedbacks(
         "total": int(total),
         "items": [dict(row) for row in rows],
     }
+
+def update_feedback_status(
+    db: Session,
+    feedback_id: uuid.UUID,
+    status: str,
+) -> dict:
+    allowed_status = {
+        "new",
+        "reviewing",
+        "converted",
+        "ignored",
+        "resolved",
+    }
+
+    if status not in allowed_status:
+        raise HTTPException(status_code=400, detail="invalid feedback status")
+
+    row = db.execute(
+        text(
+            """
+            UPDATE feedbacks
+            SET status = :status
+            WHERE id = :id
+            RETURNING
+                id,
+                qa_log_id,
+                ticket_id,
+                user_id,
+                rating,
+                comment,
+                status,
+                created_at
+            """
+        ),
+        {
+            "id": str(feedback_id),
+            "status": status,
+        },
+    ).mappings().first()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="feedback not found")
+
+    db.commit()
+    return dict(row)

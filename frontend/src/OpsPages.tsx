@@ -7,6 +7,45 @@ type ListResponse = {
   items: GenericRow[];
 };
 
+type FeedbackItem = {
+  id: string;
+  qa_log_id?: string | null;
+  ticket_id?: string | null;
+  user_id?: string | null;
+  rating: number;
+  comment?: string | null;
+  status: string;
+  created_at: string;
+  question?: string | null;
+  answer?: string | null;
+};
+
+type FeedbackListResponse = {
+  total: number;
+  items: FeedbackItem[];
+};
+
+type BadCaseItem = {
+  id: string;
+  source_type: string;
+  source_id: string;
+  scene?: string | null;
+  question?: string | null;
+  ai_output?: unknown;
+  correction?: string | null;
+  root_cause?: string | null;
+  priority: string;
+  status: string;
+  tags?: unknown;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+type BadCaseListResponse = {
+  total: number;
+  items: BadCaseItem[];
+};
+
 type DocumentIndexTask = {
   task_id: string;
   document_id: string;
@@ -45,6 +84,17 @@ type MonitorResponse = {
   recent_qa_logs: GenericRow[];
   recent_ai_invocations: GenericRow[];
 };
+
+function shortText(value: unknown, maxLength = 80) {
+  const text = valueText(value);
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}...`;
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return "-";
+  return value.replace("T", " ").slice(0, 19);
+}
 
 function valueText(value: unknown) {
   if (value === null || value === undefined) return "-";
@@ -798,21 +848,144 @@ export function AftersaleAgentCenter() {
 }
 
 export function BadCaseCenter() {
-  const [data, setData] = useState<ListResponse | null>(null);
+  const [badCaseData, setBadCaseData] = useState<BadCaseListResponse | null>(null);
+  const [feedbackData, setFeedbackData] = useState<FeedbackListResponse | null>(null);
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [operatingId, setOperatingId] = useState("");
+
+  async function loadBadCases() {
+    const response = await fetch("/api/v1/bad-cases?limit=50");
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`加载 Bad Case 失败：HTTP ${response.status} ${text}`);
+    }
+
+    setBadCaseData((await response.json()) as BadCaseListResponse);
+  }
+
+  async function loadFeedbacks() {
+    const response = await fetch("/api/v1/feedbacks?limit=50");
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`加载反馈失败：HTTP ${response.status} ${text}`);
+    }
+
+    setFeedbackData((await response.json()) as FeedbackListResponse);
+  }
 
   async function loadData() {
     setError("");
+    setLoading(true);
 
     try {
-      const response = await fetch("/api/v1/ops/bad-cases?limit=50");
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`加载 Bad Case 失败：HTTP ${response.status} ${text}`);
-      }
-      setData((await response.json()) as ListResponse);
+      await Promise.all([
+        loadBadCases(),
+        loadFeedbacks(),
+      ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "未知错误");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function convertFeedbackToBadCase(feedback: FeedbackItem) {
+    setError("");
+    setMessage("");
+    setOperatingId(feedback.id);
+
+    try {
+      const response = await fetch("/api/v1/bad-cases/from-feedback", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          feedback_id: feedback.id,
+          priority: feedback.rating <= 2 ? "high" : "medium",
+          root_cause: "待复盘",
+          correction: "",
+          tags: ["frontend_review", `rating_${feedback.rating}`],
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`转 Bad Case 失败：HTTP ${response.status} ${text}`);
+      }
+
+      const data = (await response.json()) as BadCaseItem;
+      setMessage(`已转为 Bad Case：${shortId(data.id)}`);
+
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "未知错误");
+    } finally {
+      setOperatingId("");
+    }
+  }
+
+  async function updateFeedbackStatus(feedbackId: string, status: string) {
+    setError("");
+    setMessage("");
+    setOperatingId(feedbackId);
+
+    try {
+      const response = await fetch(`/api/v1/feedbacks/${feedbackId}/status`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          status,
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`更新反馈状态失败：HTTP ${response.status} ${text}`);
+      }
+
+      setMessage(`反馈已标记为 ${status}`);
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "未知错误");
+    } finally {
+      setOperatingId("");
+    }
+  }
+
+  async function updateBadCaseStatus(badCaseId: string, status: string) {
+    setError("");
+    setMessage("");
+    setOperatingId(badCaseId);
+
+    try {
+      const response = await fetch(`/api/v1/bad-cases/${badCaseId}/status`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          status,
+        }),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`更新 Bad Case 状态失败：HTTP ${response.status} ${text}`);
+      }
+
+      setMessage(`Bad Case 已标记为 ${status}`);
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "未知错误");
+    } finally {
+      setOperatingId("");
     }
   }
 
@@ -820,40 +993,239 @@ export function BadCaseCenter() {
     loadData();
   }, []);
 
+  const feedbacks = feedbackData?.items ?? [];
+  const badCases = badCaseData?.items ?? [];
+
+  const lowRatingFeedbacks = feedbacks.filter((item) => item.rating <= 2);
+  const newFeedbacks = feedbacks.filter((item) => item.status === "new");
+  const openBadCases = badCases.filter((item) => item.status === "open" || item.status === "reviewing");
+  const fixedBadCases = badCases.filter((item) => item.status === "fixed" || item.status === "closed");
+
   return (
     <>
       {error && <div className="error-box">{error}</div>}
+      {message && <div className="success-box">{message}</div>}
 
       <section className="panel">
         <div className="panel-header">
           <div>
             <h2>Bad Case / 反馈复盘</h2>
-            <p>展示 AI 问答、分类、推荐处理等场景中沉淀的问题样本，用于后续优化 Prompt 和规则。</p>
+            <p>把客服反馈沉淀为可复盘的 Bad Case，用于优化 RAG、Prompt、规则和知识库。</p>
           </div>
-          <button className="secondary-button" onClick={loadData}>刷新</button>
+
+          <button className="secondary-button" onClick={loadData} disabled={loading}>
+            {loading ? "刷新中..." : "刷新"}
+          </button>
         </div>
 
         <section className="analytics-metrics doc-metrics">
           <div className="metric-card">
+            <span>反馈总数</span>
+            <strong>{feedbackData?.total ?? "-"}</strong>
+          </div>
+          <div className="metric-card">
+            <span>低分反馈</span>
+            <strong>{lowRatingFeedbacks.length}</strong>
+          </div>
+          <div className="metric-card">
+            <span>待处理反馈</span>
+            <strong>{newFeedbacks.length}</strong>
+          </div>
+          <div className="metric-card">
             <span>Bad Case 总数</span>
-            <strong>{data?.total ?? "-"}</strong>
+            <strong>{badCaseData?.total ?? "-"}</strong>
           </div>
           <div className="metric-card">
-            <span>待复盘</span>
-            <strong>{data?.items.filter((item) => String(item.status ?? "").includes("open") || String(item.status ?? "").includes("pending")).length ?? "-"}</strong>
+            <span>待复盘 Bad Case</span>
+            <strong>{openBadCases.length}</strong>
           </div>
           <div className="metric-card">
-            <span>已展示字段数</span>
-            <strong>{data?.items.length ? Object.keys(data.items[0]).length : 0}</strong>
+            <span>已修复/关闭</span>
+            <strong>{fixedBadCases.length}</strong>
           </div>
         </section>
+      </section>
 
-        <GenericTable rows={data?.items ?? []} maxColumns={10} />
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>客服反馈队列</h2>
+            <p>优先处理 1～2 分反馈，可一键转为 Bad Case。</p>
+          </div>
+        </div>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>反馈ID</th>
+                <th>评分</th>
+                <th>状态</th>
+                <th>问题</th>
+                <th>回答</th>
+                <th>备注</th>
+                <th>QA Log</th>
+                <th>创建时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {feedbacks.length === 0 && (
+                <tr>
+                  <td colSpan={9}>暂无反馈数据</td>
+                </tr>
+              )}
+
+              {feedbacks.map((item) => (
+                <tr key={item.id}>
+                  <td title={item.id}>{shortId(item.id)}</td>
+                  <td>
+                    <span className={item.rating <= 2 ? "score-bad" : "score-good"}>
+                      {item.rating}
+                    </span>
+                  </td>
+                  <td>
+                    <span className={`status-pill status-${item.status}`}>
+                      {item.status}
+                    </span>
+                  </td>
+                  <td className="wide-cell" title={valueText(item.question)}>
+                    {shortText(item.question, 80)}
+                  </td>
+                  <td className="wide-cell" title={valueText(item.answer)}>
+                    {shortText(item.answer, 80)}
+                  </td>
+                  <td className="wide-cell" title={valueText(item.comment)}>
+                    {shortText(item.comment, 70)}
+                  </td>
+                  <td title={item.qa_log_id ?? ""}>{shortId(item.qa_log_id)}</td>
+                  <td>{formatDateTime(item.created_at)}</td>
+                  <td>
+                    <div className="table-actions">
+                      <button
+                        className="secondary-button"
+                        onClick={() => convertFeedbackToBadCase(item)}
+                        disabled={operatingId === item.id || item.status === "converted"}
+                      >
+                        转 Bad Case
+                      </button>
+
+                      <button
+                        className="secondary-button"
+                        onClick={() => updateFeedbackStatus(item.id, "ignored")}
+                        disabled={operatingId === item.id || item.status === "ignored"}
+                      >
+                        忽略
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <p className="hint-text">
+          低分反馈建议转为 Bad Case；误触或无效反馈可以标记为 ignored。
+        </p>
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>Bad Case 复盘列表</h2>
+            <p>记录问题来源、AI 输出、根因、修正方案和处理状态。</p>
+          </div>
+        </div>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>BadCase ID</th>
+                <th>来源</th>
+                <th>场景</th>
+                <th>优先级</th>
+                <th>状态</th>
+                <th>问题</th>
+                <th>根因</th>
+                <th>修正方案</th>
+                <th>标签</th>
+                <th>创建时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {badCases.length === 0 && (
+                <tr>
+                  <td colSpan={11}>暂无 Bad Case</td>
+                </tr>
+              )}
+
+              {badCases.map((item) => (
+                <tr key={item.id}>
+                  <td title={item.id}>{shortId(item.id)}</td>
+                  <td>{item.source_type}</td>
+                  <td>{valueText(item.scene)}</td>
+                  <td>
+                    <span className={`status-pill status-${item.priority}`}>
+                      {item.priority}
+                    </span>
+                  </td>
+                  <td>
+                    <span className={`status-pill status-${item.status}`}>
+                      {item.status}
+                    </span>
+                  </td>
+                  <td className="wide-cell" title={valueText(item.question)}>
+                    {shortText(item.question, 90)}
+                  </td>
+                  <td className="wide-cell" title={valueText(item.root_cause)}>
+                    {shortText(item.root_cause, 70)}
+                  </td>
+                  <td className="wide-cell" title={valueText(item.correction)}>
+                    {shortText(item.correction, 70)}
+                  </td>
+                  <td className="wide-cell">{shortText(item.tags, 70)}</td>
+                  <td>{formatDateTime(item.created_at)}</td>
+                  <td>
+                    <div className="table-actions">
+                      <button
+                        className="secondary-button"
+                        onClick={() => updateBadCaseStatus(item.id, "reviewing")}
+                        disabled={operatingId === item.id || item.status === "reviewing"}
+                      >
+                        复盘中
+                      </button>
+
+                      <button
+                        className="secondary-button"
+                        onClick={() => updateBadCaseStatus(item.id, "fixed")}
+                        disabled={operatingId === item.id || item.status === "fixed"}
+                      >
+                        已修复
+                      </button>
+
+                      <button
+                        className="secondary-button"
+                        onClick={() => updateBadCaseStatus(item.id, "ignored")}
+                        disabled={operatingId === item.id || item.status === "ignored"}
+                      >
+                        忽略
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </section>
     </>
   );
 }
-
 export function MonitorCenter() {
   const [data, setData] = useState<MonitorResponse | null>(null);
   const [error, setError] = useState("");

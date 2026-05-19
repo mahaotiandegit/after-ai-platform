@@ -1128,3 +1128,69 @@ th {
     flex-direction: column;
   }
 }
+
+.wide-cell {
+  min-width: 220px;
+  max-width: 360px;
+  white-space: normal;
+  line-height: 1.5;
+}
+
+.score-bad,
+.score-good {
+  display: inline-flex;
+  min-width: 34px;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-weight: 800;
+}
+
+.score-bad {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+.score-good {
+  color: #047857;
+  background: #d1fae5;
+}
+
+.status-new,
+.status-open {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.status-reviewing {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.status-converted,
+.status-fixed,
+.status-resolved,
+.status-closed {
+  color: #047857;
+  background: #d1fae5;
+}
+
+.status-ignored {
+  color: #4b5563;
+  background: #e5e7eb;
+}
+
+.status-high {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+.status-medium {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.status-low {
+  color: #047857;
+  background: #d1fae5;
+}

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.db.deps import get_db
 from app.services.bad_case_service import (
     create_bad_case_from_ai_log,
+    create_bad_case_from_feedback,
     list_bad_cases,
     update_bad_case_status,
 )
@@ -29,6 +30,13 @@ class BadCaseStatusUpdateIn(BaseModel):
     status: Literal["open", "reviewing", "fixed", "ignored", "closed"]
     root_cause: str | None = None
     correction: str | None = None
+
+class BadCaseFromFeedbackIn(BaseModel):
+    feedback_id: str = Field(..., min_length=1)
+    correction: str | None = None
+    root_cause: str | None = None
+    priority: Literal["low", "medium", "high"] = "medium"
+    tags: list[str] = Field(default_factory=list)
 
 
 @router.post("/from-ai-log")
@@ -77,4 +85,18 @@ def change_bad_case_status(
         status=payload.status,
         root_cause=payload.root_cause,
         correction=payload.correction,
+    )
+
+@router.post("/from-feedback")
+def create_from_feedback(
+    payload: BadCaseFromFeedbackIn,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    return create_bad_case_from_feedback(
+        db=db,
+        feedback_id=payload.feedback_id,
+        correction=payload.correction,
+        root_cause=payload.root_cause,
+        priority=payload.priority,
+        tags=payload.tags,
     )
