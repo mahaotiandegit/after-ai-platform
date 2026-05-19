@@ -7,6 +7,38 @@ type ListResponse = {
   items: GenericRow[];
 };
 
+type DocumentIndexTask = {
+  task_id: string;
+  document_id: string;
+  title?: string | null;
+  file_name?: string | null;
+  file_type?: string | null;
+  task_status: string;
+  document_status?: string | null;
+  attempt_count: number;
+  max_attempts: number;
+  chunk_count: number;
+  error_message?: string | null;
+  created_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  updated_at?: string | null;
+};
+
+type DocumentIndexTaskListResponse = {
+  items: DocumentIndexTask[];
+};
+
+type RunPendingIndexTasksResponse = {
+  total: number;
+  items: {
+    task_id: string;
+    ok: boolean;
+    error?: string;
+    task?: DocumentIndexTask;
+  }[];
+};
+
 type MonitorResponse = {
   status: string;
   table_counts: GenericRow[];
@@ -18,6 +50,15 @@ function valueText(value: unknown) {
   if (value === null || value === undefined) return "-";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
+}
+function formatTaskTime(value?: string | null) {
+  if (!value) return "-";
+  return value.replace("T", " ").slice(0, 19);
+}
+
+function shortId(value?: string | null) {
+  if (!value) return "-";
+  return value.length > 8 ? value.slice(0, 8) : value;
 }
 
 function GenericTable({ rows, maxColumns = 8 }: { rows: GenericRow[]; maxColumns?: number }) {
@@ -63,6 +104,10 @@ export function DocumentCenter() {
   const [loadingChunks, setLoadingChunks] = useState(false);
   const [uploadTitle, setUploadTitle] = useState("");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [taskData, setTaskData] = useState<DocumentIndexTaskListResponse | null>(null);
+  const [taskLoading, setTaskLoading] = useState(false);
+  const [taskOperatingId, setTaskOperatingId] = useState("");
+  const [taskMessage, setTaskMessage] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   async function loadData() {
@@ -77,6 +122,106 @@ export function DocumentCenter() {
       setData((await response.json()) as ListResponse);
     } catch (err) {
       setError(err instanceof Error ? err.message : "未知错误");
+    }
+  }
+
+    async function loadIndexTasks() {
+    setError("");
+    setTaskLoading(true);
+
+    try {
+      const response = await fetch("/api/v1/documents/index-tasks?limit=50");
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`加载索引任务失败：HTTP ${response.status} ${text}`);
+      }
+
+      setTaskData((await response.json()) as DocumentIndexTaskListResponse);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "未知错误");
+    } finally {
+      setTaskLoading(false);
+    }
+  }
+
+  async function runIndexTask(taskId: string) {
+    setError("");
+    setTaskMessage("");
+    setTaskOperatingId(taskId);
+
+    try {
+      const response = await fetch(`/api/v1/documents/index-tasks/${taskId}/run`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`执行索引任务失败：HTTP ${response.status} ${text}`);
+      }
+
+      const result = (await response.json()) as DocumentIndexTask;
+      setTaskMessage(`执行成功：${shortId(result.task_id)}，状态：${result.task_status}`);
+
+      await loadIndexTasks();
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "未知错误");
+    } finally {
+      setTaskOperatingId("");
+    }
+  }
+
+  async function retryIndexTask(taskId: string) {
+    setError("");
+    setTaskMessage("");
+    setTaskOperatingId(taskId);
+
+    try {
+      const response = await fetch(`/api/v1/documents/index-tasks/${taskId}/retry`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`重试索引任务失败：HTTP ${response.status} ${text}`);
+      }
+
+      const result = (await response.json()) as DocumentIndexTask;
+      setTaskMessage(`重试成功：${shortId(result.task_id)}，状态：${result.task_status}`);
+
+      await loadIndexTasks();
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "未知错误");
+    } finally {
+      setTaskOperatingId("");
+    }
+  }
+
+  async function runPendingTasks() {
+    setError("");
+    setTaskMessage("");
+    setTaskOperatingId("__run_pending__");
+
+    try {
+      const response = await fetch("/api/v1/documents/index-tasks/run-pending?limit=10", {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`批量执行 pending 任务失败：HTTP ${response.status} ${text}`);
+      }
+
+      const result = (await response.json()) as RunPendingIndexTasksResponse;
+      setTaskMessage(`批量执行完成：本次处理 ${result.total} 个任务。`);
+
+      await loadIndexTasks();
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "未知错误");
+    } finally {
+      setTaskOperatingId("");
     }
   }
 
@@ -150,7 +295,7 @@ export function DocumentCenter() {
       }
 
       setUploadMessage(
-        `上传成功：${result?.title ?? uploadFile.name}，已生成 ${result?.chunk_count ?? "-"} 个切块。`
+        `上传成功：${result?.title ?? uploadFile.name}，已创建索引任务 ${shortId(result?.task_id)}，当前任务状态：${result?.task_status ?? "-"}。`
       );
 
       setUploadTitle("");
@@ -163,6 +308,7 @@ export function DocumentCenter() {
       }
 
       await loadData();
+      await loadIndexTasks();
     } catch (err) {
       setError(err instanceof Error ? err.message : "未知错误");
     } finally {
@@ -170,17 +316,23 @@ export function DocumentCenter() {
     }
   }
 
-  useEffect(() => {
+    useEffect(() => {
     loadData();
+    loadIndexTasks();
   }, []);
 
   const documents = data?.items ?? [];
   const chunks = chunkData?.items ?? [];
+  const tasks = taskData?.items ?? [];
+  const pendingTaskCount = tasks.filter((item) => item.task_status === "pending").length;
+  const failedTaskCount = tasks.filter((item) => item.task_status === "failed").length;
+  const succeededTaskCount = tasks.filter((item) => item.task_status === "succeeded").length;
 
   return (
     <>
       {error && <div className="error-box">{error}</div>}
       {uploadMessage && <div className="success-box">{uploadMessage}</div>}
+      {taskMessage && <div className="success-box">{taskMessage}</div>}
 
       <section className="panel">
         <div className="panel-header">
@@ -205,12 +357,12 @@ export function DocumentCenter() {
           />
 
           <button onClick={uploadDocument} disabled={uploading || !uploadFile}>
-            {uploading ? "上传解析中..." : "上传并解析"}
+            {uploading ? "上传中..." : "上传并创建索引任务"}
           </button>
         </div>
 
         <p className="hint-text">
-          上传成功后，系统会写入 documents 表，自动解析文本，切块写入 document_chunks 表，并进入知识检索。
+          上传成功后，系统会写入 documents 表，并创建 pending 索引任务；执行任务后才会解析文本、写入 document_chunks 并进入知识检索。
         </p>
       </section>
 
@@ -223,6 +375,138 @@ export function DocumentCenter() {
           <button className="secondary-button" onClick={loadData}>刷新</button>
         </div>
 
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>文档索引任务管理</h2>
+            <p>展示 document_index_tasks 队列状态，可手动执行单个任务、重试失败任务，或批量执行 pending 任务。</p>
+          </div>
+
+          <div className="button-row">
+            <button
+              className="secondary-button"
+              onClick={loadIndexTasks}
+              disabled={taskLoading}
+            >
+              {taskLoading ? "刷新中..." : "刷新任务列表"}
+            </button>
+
+            <button
+              className="secondary-button"
+              onClick={runPendingTasks}
+              disabled={taskOperatingId === "__run_pending__"}
+            >
+              {taskOperatingId === "__run_pending__" ? "批量执行中..." : "批量执行 pending"}
+            </button>
+          </div>
+        </div>
+
+        <section className="analytics-metrics doc-metrics">
+          <div className="metric-card">
+            <span>任务总数</span>
+            <strong>{tasks.length}</strong>
+          </div>
+          <div className="metric-card">
+            <span>Pending</span>
+            <strong>{pendingTaskCount}</strong>
+          </div>
+          <div className="metric-card">
+            <span>Succeeded</span>
+            <strong>{succeededTaskCount}</strong>
+          </div>
+          <div className="metric-card">
+            <span>Failed</span>
+            <strong>{failedTaskCount}</strong>
+          </div>
+        </section>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>task_id</th>
+                <th>document_id</th>
+                <th>title</th>
+                <th>file_name</th>
+                <th>task_status</th>
+                <th>document_status</th>
+                <th>attempt_count</th>
+                <th>max_attempts</th>
+                <th>chunk_count</th>
+                <th>error_message</th>
+                <th>created_at</th>
+                <th>started_at</th>
+                <th>finished_at</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {tasks.length === 0 && (
+                <tr>
+                  <td colSpan={14}>暂无索引任务</td>
+                </tr>
+              )}
+
+              {tasks.map((task) => (
+                <tr key={task.task_id}>
+                  <td title={task.task_id}>{shortId(task.task_id)}</td>
+                  <td title={task.document_id}>{shortId(task.document_id)}</td>
+                  <td>{valueText(task.title)}</td>
+                  <td>{valueText(task.file_name)}</td>
+                  <td>
+                    <span className={`status-pill status-${task.task_status}`}>
+                      {task.task_status}
+                    </span>
+                  </td>
+                  <td>
+                    <span className={`status-pill status-${task.document_status ?? ""}`}>
+                      {valueText(task.document_status)}
+                    </span>
+                  </td>
+                  <td>{task.attempt_count}</td>
+                  <td>{task.max_attempts}</td>
+                  <td>{task.chunk_count}</td>
+                  <td>{valueText(task.error_message)}</td>
+                  <td>{formatTaskTime(task.created_at)}</td>
+                  <td>{formatTaskTime(task.started_at)}</td>
+                  <td>{formatTaskTime(task.finished_at)}</td>
+                  <td>
+                    <div className="table-actions">
+                      <button
+                        className="secondary-button"
+                        onClick={() => runIndexTask(task.task_id)}
+                        disabled={
+                          taskOperatingId === task.task_id ||
+                          task.task_status === "running" ||
+                          task.task_status === "succeeded"
+                        }
+                      >
+                        执行
+                      </button>
+
+                      <button
+                        className="secondary-button"
+                        onClick={() => retryIndexTask(task.task_id)}
+                        disabled={
+                          taskOperatingId === task.task_id ||
+                          task.task_status === "running"
+                        }
+                      >
+                        重试
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <p className="hint-text">
+          pending 表示等待执行；running 表示正在索引；succeeded 表示已生成切块；failed 表示解析或写入失败，可点击重试。
+        </p>
+      </section>
         <section className="analytics-metrics doc-metrics">
           <div className="metric-card">
             <span>文档总数</span>

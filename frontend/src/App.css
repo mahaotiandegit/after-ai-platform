@@ -961,3 +961,45 @@ th {
 .margin-top {
   margin-top: 20px;
 }
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.table-actions .secondary-button {
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.status-succeeded,
+.status-indexed {
+  color: #047857;
+  background: #d1fae5;
+}
+
+.status-running,
+.status-indexing {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.status-failed,
+.status-index_failed {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+.status-uploaded {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
