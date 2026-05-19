@@ -33,6 +33,15 @@ type KnowledgeAskResponse = {
   citations: Citation[];
   hits?: Citation[];
   qa_log_id?: string;
+
+  provider?: string;
+  model?: string;
+  used_llm?: boolean;
+  fallback_reason?: string;
+
+  retrieval_mode?: string;
+  embedding_ready?: boolean;
+  vector_candidate_count?: number;
 };
 
 type SystemHealthResponse = {
@@ -133,6 +142,11 @@ function App() {
   const [knowledgeLoading, setKnowledgeLoading] = useState(false);
   const [knowledgeResult, setKnowledgeResult] = useState<KnowledgeAskResponse | null>(null);
 
+  const [feedbackRating, setFeedbackRating] = useState(5);
+  const [feedbackComment, setFeedbackComment] = useState("");
+  const [feedbackLoading, setFeedbackLoading] = useState(false);
+  const [feedbackMessage, setFeedbackMessage] = useState("");
+
   const [orderNo, setOrderNo] = useState(defaultOrderNo);
   const [orderLoading, setOrderLoading] = useState(false);
   const [orderResult, setOrderResult] = useState<OrderWorkbenchResponse | null>(null);
@@ -144,6 +158,9 @@ function App() {
   async function askKnowledge() {
     setKnowledgeLoading(true);
     setError("");
+    setFeedbackMessage("");
+    setFeedbackComment("");
+    setFeedbackRating(5);
 
     try {
       const response = await fetch("/api/v1/knowledge/ask", {
@@ -168,6 +185,55 @@ function App() {
       setError(err instanceof Error ? err.message : "未知错误");
     } finally {
       setKnowledgeLoading(false);
+    }
+  }
+
+    async function submitKnowledgeFeedback() {
+    if (!knowledgeResult) {
+      setError("请先完成一次知识问答，再提交反馈。");
+      return;
+    }
+
+    setFeedbackLoading(true);
+    setError("");
+    setFeedbackMessage("");
+
+    try {
+      const payload: {
+        qa_log_id?: string;
+        rating: number;
+        comment?: string;
+      } = {
+        rating: feedbackRating,
+      };
+
+      if (knowledgeResult.qa_log_id) {
+        payload.qa_log_id = knowledgeResult.qa_log_id;
+      }
+
+      if (feedbackComment.trim()) {
+        payload.comment = feedbackComment.trim();
+      }
+
+      const response = await fetch("/api/v1/feedbacks", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`提交反馈失败：HTTP ${response.status} ${text}`);
+      }
+
+      const data = await response.json();
+      setFeedbackMessage(`反馈已提交，反馈编号：${data.id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "未知错误");
+    } finally {
+      setFeedbackLoading(false);
     }
   }
 
@@ -381,6 +447,79 @@ function App() {
                     <span>检索 query：{knowledgeResult.query}</span>
                     <span>QA Log：{knowledgeResult.qa_log_id ?? "-"}</span>
                   </div>
+                                    <div className="rag-diagnostics">
+                    <div>
+                      <span>检索模式</span>
+                      <strong>{knowledgeResult.retrieval_mode ?? "-"}</strong>
+                    </div>
+                    <div>
+                      <span>向量索引</span>
+                      <strong>{knowledgeResult.embedding_ready ? "已启用" : "未启用"}</strong>
+                    </div>
+                    <div>
+                      <span>向量候选数</span>
+                      <strong>{knowledgeResult.vector_candidate_count ?? 0}</strong>
+                    </div>
+                    <div>
+                      <span>LLM Provider</span>
+                      <strong>{knowledgeResult.provider ?? "-"}</strong>
+                    </div>
+                    <div>
+                      <span>模型</span>
+                      <strong>{knowledgeResult.model ?? "-"}</strong>
+                    </div>
+                    <div>
+                      <span>是否使用 LLM</span>
+                      <strong>{knowledgeResult.used_llm ? "是" : "否"}</strong>
+                    </div>
+                  </div>
+
+                  {knowledgeResult.fallback_reason && (
+                    <div className="warning-box">
+                      fallback：{knowledgeResult.fallback_reason}
+                    </div>
+                  )}
+
+                                    <div className="feedback-box">
+                    <div className="feedback-header">
+                      <div>
+                        <strong>本次回答反馈</strong>
+                        <p>客服可以对本次回答打分，后续用于 Bad Case 复盘和提示词优化。</p>
+                      </div>
+                    </div>
+
+                    <div className="rating-row">
+                      {[1, 2, 3, 4, 5].map((rating) => (
+                        <button
+                          key={rating}
+                          className={feedbackRating === rating ? "rating-button active" : "rating-button"}
+                          onClick={() => setFeedbackRating(rating)}
+                          type="button"
+                        >
+                          {rating} 分
+                        </button>
+                      ))}
+                    </div>
+
+                    <textarea
+                      className="feedback-textarea"
+                      value={feedbackComment}
+                      onChange={(event) => setFeedbackComment(event.target.value)}
+                      placeholder="可选：说明回答哪里不准确、引用是否有问题、是否需要人工复核。"
+                    />
+
+                    <div className="feedback-actions">
+                      <button
+                        className="secondary-button"
+                        onClick={submitKnowledgeFeedback}
+                        disabled={feedbackLoading}
+                      >
+                        {feedbackLoading ? "提交中..." : "提交反馈"}
+                      </button>
+
+                      {feedbackMessage && <span className="feedback-message">{feedbackMessage}</span>}
+                    </div>
+                  </div>
                 </div>
 
                 <div className="citation-card">
@@ -403,6 +542,8 @@ function App() {
                         <span>页码：{item.page_no ?? "-"}</span>
                         <span>规则编号：{item.policy_code ?? "-"}</span>
                         <span>分数：{item.score ?? "-"}</span>
+                        <span>文档ID：{item.document_id.slice(0, 8)}</span>
+                        <span>切块ID：{item.chunk_id.slice(0, 8)}</span>
                       </div>
 
                       <p>{item.content}</p>
