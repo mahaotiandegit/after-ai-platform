@@ -1,35 +1,42 @@
+# Python
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
 .venv/
-.env
-.acceptance_uvicorn.log
-.acceptance_uvicorn.pid
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
+venv/
+env/
 backend/.venv/
-*.pyc
-.env.*
-backend/uploads/
 
-# local runtime files
-tmp_uploads/
-backend/tmp_uploads/
-backend/uploads/
-backend/nohup.out
-backend/.acceptance_uvicorn.pid
-backend/.acceptance_uvicorn.log
-
-# frontend build/runtime
-frontend/node_modules/
-frontend/dist/
-frontend/.vite/
-
-# env files
+# Environment files
 .env
 .env.*
 backend/.env
 backend/.env.*
-frontend/.env
-frontend/.env.*
+
+# Logs
+*.log
+logs/
+
+# Uploads / runtime files
+uploads/
+backend/uploads/
+storage/
+backend/storage/
+
+# Frontend
+node_modules/
+dist/
+build/
+frontend/node_modules/
+frontend/dist/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
