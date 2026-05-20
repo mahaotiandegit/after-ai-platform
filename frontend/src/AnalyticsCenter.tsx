@@ -25,6 +25,12 @@ type AnalyticsAskResponse = {
   columns: string[];
   rows: Record<string, string | number | boolean | null>[];
   summary: string;
+
+  safe?: boolean;
+  blocked_reason?: string | null;
+  tables_used?: string[];
+  applied_limit?: number | null;
+  query_log_id?: string | null;
 };
 
 const examples = [
@@ -33,6 +39,9 @@ const examples = [
   "最近 7 天工单按状态统计",
   "最近 7 天退款状态分布",
   "最近 30 天物流相关工单有多少",
+  "统计不同优先级工单数量",
+  "最近创建的 10 条工单是什么",
+  "退款中的订单有多少",
 ];
 
 function MiniBar({ item, max }: { item: DistributionItem; max: number }) {
@@ -71,6 +80,7 @@ export default function AnalyticsCenter() {
   const [askResult, setAskResult] = useState<AnalyticsAskResponse | null>(null);
   const [loadingOverview, setLoadingOverview] = useState(false);
   const [loadingAsk, setLoadingAsk] = useState(false);
+  const [showSql, setShowSql] = useState(true);
   const [error, setError] = useState("");
 
   async function loadOverview() {
@@ -158,6 +168,10 @@ export default function AnalyticsCenter() {
           <strong>{overview?.refunds_pending ?? "-"}</strong>
         </div>
         <div className="metric-card">
+          <span>已索引文档</span>
+          <strong>{overview?.documents_indexed ?? "-"}</strong>
+        </div>
+        <div className="metric-card">
           <span>平均 QA 延迟</span>
           <strong>{overview ? `${overview.avg_qa_latency_ms} ms` : "-"}</strong>
         </div>
@@ -220,15 +234,51 @@ export default function AnalyticsCenter() {
               <div className="summary-title">识别意图</div>
               <p>{askResult.intent}</p>
             </div>
+            <div className="nl2sql-diagnostics">
+              <div>
+                <span>SQL 安全状态</span>
+                <strong>{askResult.safe === false ? "blocked" : "safe"}</strong>
+              </div>
+              <div>
+                <span>使用表</span>
+                <strong>{askResult.tables_used?.join(", ") || "-"}</strong>
+              </div>
+              <div>
+                <span>Applied Limit</span>
+                <strong>{askResult.applied_limit ?? "-"}</strong>
+              </div>
+              <div>
+                <span>Query Log</span>
+                <strong>{askResult.query_log_id ?? "-"}</strong>
+              </div>
+            </div>
+
+            {askResult.blocked_reason && (
+              <div className="warning-box">
+                blocked_reason：{askResult.blocked_reason}
+              </div>
+            )}
 
             <div className="summary-box">
-              <div className="summary-title">执行 SQL</div>
-              <pre className="sql-block">{askResult.sql}</pre>
-            </div>
-          </div>
+              <div className="summary-title sql-title-row">
+                <span>执行 SQL</span>
+                <button
+                  className="secondary-button"
+                  onClick={() => setShowSql((value) => !value)}
+                  type="button"
+                >
+                  {showSql ? "隐藏 SQL" : "显示 SQL"}
+                </button>
+              </div>
 
-          <div className="citation-card">
+              {showSql && <pre className="sql-block">{askResult.sql}</pre>}
+            </div>
+
+            <div className="citation-card">
             <div className="card-title">查询结果</div>
+            <p className="hint-text">
+              返回 {askResult.rows.length} 行，{askResult.columns.length} 个字段。
+            </p>
 
             <div className="table-wrap">
               <table>
