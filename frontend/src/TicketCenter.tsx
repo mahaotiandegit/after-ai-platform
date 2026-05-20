@@ -47,6 +47,15 @@ function formatDate(value?: string | null) {
   return value.replace("T", " ").slice(0, 19);
 }
 
+const ticketStatusSteps = [
+  { key: "open", label: "待处理" },
+  { key: "processing", label: "处理中" },
+  { key: "resolved", label: "已解决" },
+  { key: "closed", label: "已关闭" },
+];
+
+
+
 export default function TicketCenter() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [total, setTotal] = useState(0);
@@ -54,6 +63,7 @@ export default function TicketCenter() {
 
   const [statusFilter, setStatusFilter] = useState("");
   const [priorityFilter, setPriorityFilter] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("");
 
   const [createOrderNo, setCreateOrderNo] = useState("ORDER-20260515-0002");
   const [createQuestion, setCreateQuestion] = useState("物流一直在运输中，我想修改收货地址，能不能帮我处理？");
@@ -62,6 +72,7 @@ export default function TicketCenter() {
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
 
   async function loadTickets() {
     setLoading(true);
@@ -72,6 +83,7 @@ export default function TicketCenter() {
       params.set("limit", "50");
       if (statusFilter) params.set("status", statusFilter);
       if (priorityFilter) params.set("priority", priorityFilter);
+      if (categoryFilter) params.set("category", categoryFilter);
 
       const response = await fetch(`/api/v1/tickets?${params.toString()}`);
 
@@ -97,6 +109,7 @@ export default function TicketCenter() {
   async function createTicket() {
     setActionLoading(true);
     setError("");
+    setMessage("");
     setCreateResult(null);
 
     try {
@@ -119,6 +132,7 @@ export default function TicketCenter() {
       const data = (await response.json()) as TicketAutoCreateResponse;
       setCreateResult(data);
       setSelectedTicket(data.ticket);
+      setMessage(`工单创建成功：${data.ticket.ticket_no}`);
       await loadTickets();
     } catch (err) {
       setError(err instanceof Error ? err.message : "未知错误");
@@ -150,6 +164,7 @@ export default function TicketCenter() {
 
       const data = (await response.json()) as TicketActionResponse;
       setSelectedTicket(data.ticket);
+      setMessage(data.message);
       await loadTickets();
     } catch (err) {
       setError(err instanceof Error ? err.message : "未知错误");
@@ -161,6 +176,7 @@ export default function TicketCenter() {
   async function escalateTicket(ticketNo: string) {
     setActionLoading(true);
     setError("");
+    setMessage("");
 
     try {
       const response = await fetch(`/api/v1/tickets/${encodeURIComponent(ticketNo)}/escalate`, {
@@ -180,6 +196,7 @@ export default function TicketCenter() {
 
       const data = (await response.json()) as TicketActionResponse;
       setSelectedTicket(data.ticket);
+      setMessage(data.message);
       await loadTickets();
     } catch (err) {
       setError(err instanceof Error ? err.message : "未知错误");
@@ -196,6 +213,33 @@ export default function TicketCenter() {
   return (
     <>
       {error && <div className="error-box">{error}</div>}
+      {message && <div className="success-box">{message}</div>}
+      <section className="analytics-metrics">
+        <div className="metric-card">
+          <span>工单总数</span>
+          <strong>{total}</strong>
+        </div>
+        <div className="metric-card">
+          <span>待处理</span>
+          <strong>{tickets.filter((item) => item.status === "open").length}</strong>
+        </div>
+        <div className="metric-card">
+          <span>处理中</span>
+          <strong>{tickets.filter((item) => item.status === "processing").length}</strong>
+        </div>
+        <div className="metric-card">
+          <span>高优先级</span>
+          <strong>{tickets.filter((item) => item.priority === "high").length}</strong>
+        </div>
+        <div className="metric-card">
+          <span>已解决</span>
+          <strong>{tickets.filter((item) => item.status === "resolved").length}</strong>
+        </div>
+        <div className="metric-card">
+          <span>已关闭</span>
+          <strong>{tickets.filter((item) => item.status === "closed").length}</strong>
+        </div>
+      </section>
 
       <section className="ticket-layout">
         <div className="panel">
@@ -221,6 +265,19 @@ export default function TicketCenter() {
               <option value="medium">medium</option>
               <option value="low">low</option>
               <option value="normal">normal</option>
+            </select>
+            <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
+              <option value="">全部类型</option>
+              <option value="logistics_delay_refund">logistics_delay_refund</option>
+              <option value="logistics_delay">logistics_delay</option>
+              <option value="logistics_exception">logistics_exception</option>
+              <option value="refund_progress">refund_progress</option>
+              <option value="product_quality">product_quality</option>
+              <option value="product_damage">product_damage</option>
+              <option value="campaign_compensation">campaign_compensation</option>
+              <option value="invoice">invoice</option>
+              <option value="service_complaint">service_complaint</option>
+              <option value="general_aftersale">general_aftersale</option>
             </select>
 
             <button onClick={loadTickets} disabled={loading}>
@@ -313,6 +370,13 @@ export default function TicketCenter() {
                 转处理中
               </button>
               <button
+                disabled={actionLoading || selectedTicket.status !== "processing"}
+                onClick={() => changeStatus(selectedTicket.ticket_no, "open")}
+                title={selectedTicket.status !== "processing" ? "只有 processing 状态可以退回 open" : ""}
+              >
+                退回待处理
+              </button>
+              <button
                 disabled={actionLoading || selectedTicket.status === "resolved" || selectedTicket.status === "closed"}
                 onClick={() => changeStatus(selectedTicket.ticket_no, "resolved")}
                 title={selectedTicket.status === "closed" ? "已关闭工单不能标记解决" : ""}
@@ -335,6 +399,24 @@ export default function TicketCenter() {
               </button>
             </div>
           </div>
+          <div className="ticket-flow">
+            {ticketStatusSteps.map((step, index) => (
+              <div
+                key={step.key}
+                className={`ticket-flow-step ${
+                  selectedTicket.status === step.key ? "active" : ""
+                } ${
+                  ticketStatusSteps.findIndex((item) => item.key === selectedTicket.status) > index
+                    ? "done"
+                    : ""
+                }`}
+              >
+                <span>{index + 1}</span>
+                <strong>{step.label}</strong>
+                <small>{step.key}</small>
+              </div>
+            ))}
+          </div>
 
           <div className="ticket-detail-grid">
             <div>
@@ -352,6 +434,22 @@ export default function TicketCenter() {
             <div>
               <span>状态</span>
               <StatusPill value={selectedTicket.status} />
+            </div>
+            <div>
+              <span>订单ID</span>
+              <strong>{selectedTicket.order_id ?? "-"}</strong>
+            </div>
+            <div>
+              <span>处理人</span>
+              <strong>{selectedTicket.assignee_id ?? "-"}</strong>
+            </div>
+            <div>
+              <span>创建时间</span>
+              <strong>{formatDate(selectedTicket.created_at)}</strong>
+            </div>
+            <div>
+              <span>更新时间</span>
+              <strong>{formatDate(selectedTicket.updated_at)}</strong>
             </div>
           </div>
 
