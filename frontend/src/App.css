@@ -1303,3 +1303,35 @@ th {
     flex-direction: column;
   }
 }
+
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.health-card {
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+
+.health-card strong {
+  display: block;
+  color: #111827;
+  margin-bottom: 8px;
+}
+
+.health-card p {
+  margin: 0;
+  color: #4b5563;
+  line-height: 1.6;
+}
+
+@media (max-width: 980px) {
+  .health-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -85,6 +85,32 @@ type MonitorResponse = {
   recent_ai_invocations: GenericRow[];
 };
 
+type SystemHealthResponse = {
+  status: string;
+  services: {
+    database?: {
+      status: string;
+      detail: string;
+    };
+    redis?: {
+      status: string;
+      detail: string;
+    };
+  };
+};
+
+type AiAuditSummaryResponse = {
+  days: number;
+  items: GenericRow[];
+};
+
+type AiAuditLogsResponse = {
+  total: number;
+  limit: number;
+  offset: number;
+  items: GenericRow[];
+};
+
 function shortText(value: unknown, maxLength = 80) {
   const text = valueText(value);
   if (text.length <= maxLength) return text;
@@ -1227,27 +1253,99 @@ export function BadCaseCenter() {
   );
 }
 export function MonitorCenter() {
-  const [data, setData] = useState<MonitorResponse | null>(null);
+  const [monitorData, setMonitorData] = useState<MonitorResponse | null>(null);
+  const [healthData, setHealthData] = useState<SystemHealthResponse | null>(null);
+  const [auditSummary, setAuditSummary] = useState<AiAuditSummaryResponse | null>(null);
+  const [auditLogs, setAuditLogs] = useState<AiAuditLogsResponse | null>(null);
+  const [sceneFilter, setSceneFilter] = useState("");
+  const [successFilter, setSuccessFilter] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function loadSystemHealth() {
+    const response = await fetch("/api/v1/system/health");
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`加载系统健康失败：HTTP ${response.status} ${text}`);
+    }
+
+    setHealthData((await response.json()) as SystemHealthResponse);
+  }
+
+  async function loadMonitorOverview() {
+    const response = await fetch("/api/v1/ops/monitor");
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`加载系统监控失败：HTTP ${response.status} ${text}`);
+    }
+
+    setMonitorData((await response.json()) as MonitorResponse);
+  }
+
+  async function loadAiAuditSummary() {
+    const response = await fetch("/api/v1/ai-audit/summary?days=7");
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`加载 AI 调用摘要失败：HTTP ${response.status} ${text}`);
+    }
+
+    setAuditSummary((await response.json()) as AiAuditSummaryResponse);
+  }
+
+  async function loadAiAuditLogs() {
+    const params = new URLSearchParams();
+    params.set("limit", "20");
+
+    if (sceneFilter.trim()) {
+      params.set("scene", sceneFilter.trim());
+    }
+
+    if (successFilter === "true" || successFilter === "false") {
+      params.set("success", successFilter);
+    }
+
+    const response = await fetch(`/api/v1/ai-audit/logs?${params.toString()}`);
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`加载 AI 调用日志失败：HTTP ${response.status} ${text}`);
+    }
+
+    setAuditLogs((await response.json()) as AiAuditLogsResponse);
+  }
 
   async function loadData() {
     setError("");
+    setLoading(true);
 
     try {
-      const response = await fetch("/api/v1/ops/monitor");
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`加载系统监控失败：HTTP ${response.status} ${text}`);
-      }
-      setData((await response.json()) as MonitorResponse);
+      await Promise.all([
+        loadSystemHealth(),
+        loadMonitorOverview(),
+        loadAiAuditSummary(),
+        loadAiAuditLogs(),
+      ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : "未知错误");
+    } finally {
+      setLoading(false);
     }
   }
 
   useEffect(() => {
     loadData();
   }, []);
+
+  const databaseStatus = healthData?.services?.database?.status ?? "-";
+  const redisStatus = healthData?.services?.redis?.status ?? "-";
+  const aiSummaryItems = auditSummary?.items ?? [];
+  const auditLogItems = auditLogs?.items ?? [];
+
+  const totalAiCalls = aiSummaryItems.reduce((sum, item) => sum + Number(item.total ?? 0), 0);
+  const failedAiCalls = aiSummaryItems.reduce((sum, item) => sum + Number(item.failed_count ?? 0), 0);
 
   return (
     <>
@@ -1256,43 +1354,115 @@ export function MonitorCenter() {
       <section className="panel">
         <div className="panel-header">
           <div>
-            <h2>系统监控</h2>
-            <p>展示核心业务表数量、最近 QA 日志和 AI 调用日志。当前是基础运营监控，后续可接 Prometheus/Grafana。</p>
+            <h2>系统监控 / AI 调用审计</h2>
+            <p>展示系统健康、核心业务表数量、AI 调用成功率、失败日志和最近 QA 记录。</p>
           </div>
-          <button className="secondary-button" onClick={loadData}>刷新</button>
+
+          <button className="secondary-button" onClick={loadData} disabled={loading}>
+            {loading ? "刷新中..." : "刷新"}
+          </button>
         </div>
 
         <section className="analytics-metrics doc-metrics">
           <div className="metric-card">
             <span>系统状态</span>
-            <strong>{data?.status ?? "-"}</strong>
+            <strong>{healthData?.status ?? monitorData?.status ?? "-"}</strong>
           </div>
           <div className="metric-card">
-            <span>监控表数量</span>
-            <strong>{data?.table_counts.length ?? "-"}</strong>
+            <span>PostgreSQL</span>
+            <strong>{databaseStatus}</strong>
           </div>
           <div className="metric-card">
-            <span>最近 QA 日志</span>
-            <strong>{data?.recent_qa_logs.length ?? "-"}</strong>
+            <span>Redis</span>
+            <strong>{redisStatus}</strong>
+          </div>
+          <div className="metric-card">
+            <span>核心表数量</span>
+            <strong>{monitorData?.table_counts.length ?? "-"}</strong>
+          </div>
+          <div className="metric-card">
+            <span>7 天 AI 调用</span>
+            <strong>{totalAiCalls}</strong>
+          </div>
+          <div className="metric-card">
+            <span>7 天 AI 失败</span>
+            <strong>{failedAiCalls}</strong>
           </div>
         </section>
 
-        <div className="ops-grid">
-          <div className="analytics-card">
-            <div className="card-title">核心表数量</div>
-            <GenericTable rows={data?.table_counts ?? []} />
+        <section className="health-grid">
+          <div className="health-card">
+            <strong>数据库详情</strong>
+            <p>{healthData?.services?.database?.detail ?? "-"}</p>
           </div>
+          <div className="health-card">
+            <strong>Redis 详情</strong>
+            <p>{healthData?.services?.redis?.detail ?? "-"}</p>
+          </div>
+        </section>
+      </section>
 
-          <div className="analytics-card">
-            <div className="card-title">最近 QA Logs</div>
-            <GenericTable rows={data?.recent_qa_logs ?? []} maxColumns={5} />
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>AI 调用摘要</h2>
+            <p>按 scene 聚合最近 7 天调用次数、失败数和平均延迟。</p>
           </div>
         </div>
 
-        <section className="analytics-card ops-full-card">
-          <div className="card-title">最近 AI 调用</div>
-          <GenericTable rows={data?.recent_ai_invocations ?? []} />
-        </section>
+        <GenericTable rows={aiSummaryItems} maxColumns={8} />
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>AI 调用日志</h2>
+            <p>支持按 scene 和成功状态过滤，排查 LLM、RAG、NL2SQL、Agent 调用问题。</p>
+          </div>
+        </div>
+
+        <div className="query-box">
+          <input
+            value={sceneFilter}
+            onChange={(event) => setSceneFilter(event.target.value)}
+            placeholder="scene，例如 rag_ask_llm / analytics_nl2sql / ticket_ai_classifier"
+          />
+
+          <select
+            value={successFilter}
+            onChange={(event) => setSuccessFilter(event.target.value)}
+          >
+            <option value="">全部状态</option>
+            <option value="true">成功</option>
+            <option value="false">失败</option>
+          </select>
+
+          <button onClick={loadAiAuditLogs}>查询日志</button>
+        </div>
+
+        <GenericTable rows={auditLogItems} maxColumns={10} />
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>核心业务表数量</h2>
+            <p>用于判断 demo 数据、索引数据、日志数据是否完整。</p>
+          </div>
+        </div>
+
+        <GenericTable rows={monitorData?.table_counts ?? []} maxColumns={4} />
+      </section>
+
+      <section className="panel">
+        <div className="panel-header">
+          <div>
+            <h2>最近 QA Logs</h2>
+            <p>查看最近知识问答记录，用于联动反馈和 Bad Case 复盘。</p>
+          </div>
+        </div>
+
+        <GenericTable rows={monitorData?.recent_qa_logs ?? []} maxColumns={6} />
       </section>
     </>
   );
